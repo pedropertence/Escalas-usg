@@ -23,6 +23,15 @@
     --amber: #f2a65a;
     --amber-dim: #6e4a26;
     --red: #e8836b;
+    --r1: #7fd858;
+    --r1-dim: #2f5f28;
+    --r1-bg: #16281a;
+    --r2: #f2c94c;
+    --r2-dim: #6b5a1e;
+    --r2-bg: #2c2712;
+    --r3: #e2584f;
+    --r3-dim: #6e2420;
+    --r3-bg: #2c1614;
     --font-mono: 'IBM Plex Mono', monospace;
     --font-sans: 'IBM Plex Sans', sans-serif;
     --radius: 10px;
@@ -100,7 +109,19 @@
   .roster-label{
     font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint);
     text-transform:uppercase; letter-spacing:0.06em; width:100%; margin-bottom:2px;
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
   }
+  .legend{ display:flex; gap:10px; text-transform:none; letter-spacing:0; }
+  .legend span{ display:flex; align-items:center; gap:5px; }
+  .legend .sq{ width:8px; height:8px; border-radius:2px; flex-shrink:0; }
+  .cat-select{
+    font-family: var(--font-mono); font-size: 10.5px; font-weight:600;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px;
+    padding: 2px 4px; cursor:pointer; text-transform:uppercase;
+  }
+  .cat-select.r1{ color: var(--r1); border-color: var(--r1-dim); }
+  .cat-select.r2{ color: var(--r2); border-color: var(--r2-dim); }
+  .cat-select.r3{ color: var(--r3); border-color: var(--r3-dim); }
   .pill{
     display:flex; align-items:center; gap:9px;
     background: var(--panel);
@@ -122,8 +143,10 @@
     font-family: var(--font-mono); font-size: 12px; color: var(--ink-faint);
     border-left: 1px solid var(--line); padding-left: 9px; margin-left:1px;
   }
-  .pill.low .dot{ background: var(--amber-dim); color: var(--amber); border-color: var(--amber-dim);}
   .pill.low .count{ color: var(--amber); }
+  .dot.r1{ background: var(--r1-dim); color: var(--r1); border-color: var(--r1-dim); }
+  .dot.r2{ background: var(--r2-dim); color: var(--r2); border-color: var(--r2-dim); }
+  .dot.r3{ background: var(--r3-dim); color: var(--r3); border-color: var(--r3-dim); }
   .pill .remove{
     background:none; border:none; color: var(--ink-faint); cursor:pointer;
     font-family: var(--font-mono); font-size:13px; padding:0 3px; margin-left:2px; line-height:1;
@@ -282,6 +305,12 @@
   }
   .agenda.assigned select{ color: var(--cyan); border-color: var(--cyan-dim); }
   .agenda.assigned{ border-color: var(--cyan-dim); }
+  .agenda.assigned.cat-r1{ border-color: var(--r1-dim); background: var(--r1-bg); }
+  .agenda.assigned.cat-r1 select{ color: var(--r1); border-color: var(--r1-dim); }
+  .agenda.assigned.cat-r2{ border-color: var(--r2-dim); background: var(--r2-bg); }
+  .agenda.assigned.cat-r2 select{ color: var(--r2); border-color: var(--r2-dim); }
+  .agenda.assigned.cat-r3{ border-color: var(--r3-dim); background: var(--r3-bg); }
+  .agenda.assigned.cat-r3 select{ color: var(--r3); border-color: var(--r3-dim); }
   .add-btn{
     font-family: var(--font-mono);
     font-size: 11.5px;
@@ -411,12 +440,22 @@
 <script src="firebase-config.js"></script>
 <script>
 const DEFAULT_RESIDENTS = [
-  { id:'pedro', name:'Pedro' },
-  { id:'narelly', name:'Narelly' },
-  { id:'thiago', name:'Thiago' },
-  { id:'julio', name:'Júlio' },
-  { id:'luis', name:'Luís' },
+  { id:'pedro', name:'Pedro', category:null },
+  { id:'narelly', name:'Narelly', category:null },
+  { id:'thiago', name:'Thiago', category:null },
+  { id:'julio', name:'Júlio', category:null },
+  { id:'luis', name:'Luís', category:null },
 ];
+
+const CATEGORIES = [
+  { key:'r1', label:'R1' },
+  { key:'r2', label:'R2' },
+  { key:'r3', label:'R3' },
+];
+
+function getResident(id){
+  return state.residents.find(r => r.id === id);
+}
 
 const TURNOS = [
   { key:'manha', label:'Manhã' },
@@ -503,8 +542,10 @@ function migrateState(raw){
   const monthsCreated = old.monthsCreated && old.monthsCreated.length
     ? old.monthsCreated
     : [{ key:'2026-07', label:'Julho 2026' }];
+  const residents = (old.residents && old.residents.length ? old.residents : DEFAULT_RESIDENTS)
+    .map(r => ({ id: r.id, name: r.name, category: r.category || null }));
   return {
-    residents: old.residents && old.residents.length ? old.residents : DEFAULT_RESIDENTS,
+    residents,
     monthsCreated,
     activeMonth: old.activeMonth && monthsCreated.some(m => m.key === old.activeMonth) ? old.activeMonth : monthsCreated[0].key,
     agendas,
@@ -584,11 +625,18 @@ function countsForWeeks(weeks){
   return { counts, assigned, total };
 }
 
-function addResident(name){
+function addResident(name, category){
   const trimmed = name.trim();
   if(!trimmed) return;
   const id = slugify(trimmed) + '-' + Math.random().toString(36).slice(2,5);
-  state.residents.push({ id, name: trimmed });
+  state.residents.push({ id, name: trimmed, category: category || null });
+  saveState(); renderAll();
+}
+
+function setResidentCategory(id, category){
+  const r = getResident(id);
+  if(!r) return;
+  r.category = category || null;
   saveState(); renderAll();
 }
 
@@ -652,14 +700,41 @@ function renderRoster(){
 
   const label = document.createElement('div');
   label.className = 'roster-label';
-  label.textContent = 'Turnos cobertos em ' + formatMonthLabel(state.activeMonth).toLowerCase();
+  label.innerHTML = `<span>Turnos cobertos em ${formatMonthLabel(state.activeMonth).toLowerCase()}</span>
+    <span class="legend">
+      <span><span class="sq" style="background:var(--r1)"></span>R1</span>
+      <span><span class="sq" style="background:var(--r2)"></span>R2</span>
+      <span><span class="sq" style="background:var(--r3)"></span>R3</span>
+    </span>`;
   el.appendChild(label);
 
   state.residents.forEach(r => {
     const c = counts[r.id] || 0;
     const pill = document.createElement('div');
     pill.className = 'pill' + (c === min ? ' low' : '');
-    pill.innerHTML = `<span class="dot">${initials(r.name)}</span><span class="name">${r.name}</span><span class="count">${c}</span>`;
+
+    const dot = document.createElement('span');
+    dot.className = 'dot' + (r.category ? ' ' + r.category : '');
+    dot.textContent = initials(r.name);
+    pill.appendChild(dot);
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = r.name;
+    pill.appendChild(name);
+
+    const catSelect = document.createElement('select');
+    catSelect.className = 'cat-select' + (r.category ? ' ' + r.category : '');
+    catSelect.innerHTML = '<option value="">—</option>' + CATEGORIES.map(c2 =>
+      `<option value="${c2.key}" ${r.category === c2.key ? 'selected' : ''}>${c2.label}</option>`).join('');
+    catSelect.onchange = (e) => setResidentCategory(r.id, e.target.value);
+    pill.appendChild(catSelect);
+
+    const count = document.createElement('span');
+    count.className = 'count';
+    count.textContent = c;
+    pill.appendChild(count);
+
     const rm = document.createElement('button');
     rm.className = 'remove';
     rm.textContent = '×';
@@ -681,13 +756,17 @@ function buildAddResidentForm(originalBtn){
   form.className = 'add-resident-form';
   const input = document.createElement('input');
   input.placeholder = 'nome';
+  const catSelect = document.createElement('select');
+  catSelect.className = 'cat-select';
+  catSelect.innerHTML = CATEGORIES.map(c => `<option value="${c.key}">${c.label}</option>`).join('');
   const ok = document.createElement('button');
   ok.textContent = 'adicionar';
-  ok.onclick = () => { addResident(input.value); };
+  ok.onclick = () => { addResident(input.value, catSelect.value); };
   const cancel = document.createElement('button');
   cancel.textContent = '×';
   cancel.onclick = () => { form.replaceWith(originalBtn); };
   form.appendChild(input);
+  form.appendChild(catSelect);
   form.appendChild(ok);
   form.appendChild(cancel);
   setTimeout(() => input.focus(), 0);
@@ -804,8 +883,10 @@ function buildCell(dayKey, turno){
   const list = getAgendas(dayKey, turno);
 
   list.forEach(ag => {
+    const assignedResident = ag.residentId ? getResident(ag.residentId) : null;
+    const catClass = assignedResident && assignedResident.category ? ' cat-' + assignedResident.category : '';
     const box = document.createElement('div');
-    box.className = 'agenda' + (ag.residentId ? ' assigned' : '');
+    box.className = 'agenda' + (ag.residentId ? ' assigned' + catClass : '');
 
     const titleRow = document.createElement('div');
     titleRow.className = 'title';
