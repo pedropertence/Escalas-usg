@@ -228,7 +228,7 @@
 
   .week-panel{ display:none; padding-top: 1.4rem; }
   .week-panel.active{ display:block; }
-  .week-head{ display:flex; align-items:center; justify-content:flex-end; margin-bottom: 0.8rem; }
+  .week-head{ display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-bottom: 0.8rem; }
   .copy-btn{
     font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-faint);
     background: transparent; border: 1px solid var(--line); border-radius: 7px;
@@ -720,32 +720,52 @@ function createMonth(monthKey){
   saveState(); renderAll();
 }
 
-function copyWeekForward(weekIndex){
+function copyWeek(weekIndex, direction){
   const weeks = getWeeksForMonthKey(state.activeMonth);
   const source = weeks[weekIndex];
   let target;
-  if(weekIndex + 1 < weeks.length){
-    target = weeks[weekIndex + 1];
-  } else {
-    const sorted = state.monthsCreated.slice().sort((a,b) => a.key.localeCompare(b.key));
-    const idx = sorted.findIndex(m => m.key === state.activeMonth);
-    const nextMonth = sorted[idx + 1];
-    if(!nextMonth){
-      alert('Esta é a última semana do mês. Crie o próximo mês antes de copiar.');
-      return;
+
+  if(direction === 1){
+    if(weekIndex + 1 < weeks.length){
+      target = weeks[weekIndex + 1];
+    } else {
+      const sorted = state.monthsCreated.slice().sort((a,b) => a.key.localeCompare(b.key));
+      const idx = sorted.findIndex(m => m.key === state.activeMonth);
+      const nextMonth = sorted[idx + 1];
+      if(!nextMonth){
+        alert('Esta é a última semana do mês. Crie o próximo mês antes de copiar.');
+        return;
+      }
+      target = getWeeksForMonthKey(nextMonth.key)[0];
     }
-    target = getWeeksForMonthKey(nextMonth.key)[0];
+  } else {
+    if(weekIndex - 1 >= 0){
+      target = weeks[weekIndex - 1];
+    } else {
+      const sorted = state.monthsCreated.slice().sort((a,b) => a.key.localeCompare(b.key));
+      const idx = sorted.findIndex(m => m.key === state.activeMonth);
+      const prevMonth = sorted[idx - 1];
+      if(!prevMonth){
+        alert('Esta é a primeira semana do mês. Crie o mês anterior antes de copiar.');
+        return;
+      }
+      const prevWeeks = getWeeksForMonthKey(prevMonth.key);
+      target = prevWeeks[prevWeeks.length - 1];
+    }
   }
-  if(!confirm('Copiar os títulos das agendas desta semana para a semana de ' + target.range + '? Os residentes atribuídos não são copiados — os turnos entram livres na nova semana.')) return;
+
+  if(!confirm('Substituir toda a semana de ' + target.range + ' pelas agendas desta semana? As agendas que já existem nessa semana de destino serão apagadas. Os residentes atribuídos não são copiados — os turnos entram livres.')) return;
+
   source.days.forEach((day, i) => {
     const targetDay = target.days[i];
     TURNOS.forEach(t => {
       const srcList = getAgendas(day.key, t.key);
-      const destList = getAgendas(targetDay.key, t.key);
-      srcList.forEach(ag => destList.push({ id: uid(), title: ag.title, residentIds: [], type: ag.type || null }));
+      const newList = srcList.map(ag => ({ id: uid(), title: ag.title, residentIds: [], type: ag.type || null }));
+      state.agendas[cellKey(targetDay.key, t.key)] = newList;
     });
   });
   saveState(); renderAll();
+
 }
 
 function renderRoster(){
@@ -899,11 +919,16 @@ function renderWeeks(){
 
     const head = document.createElement('div');
     head.className = 'week-head';
-    const copyBtn = document.createElement('button');
-    copyBtn.className = 'copy-btn';
-    copyBtn.textContent = 'Copiar para a próxima semana →';
-    copyBtn.onclick = () => copyWeekForward(wi);
-    head.appendChild(copyBtn);
+    const copyPrevBtn = document.createElement('button');
+    copyPrevBtn.className = 'copy-btn';
+    copyPrevBtn.textContent = '← Copiar para a semana anterior';
+    copyPrevBtn.onclick = () => copyWeek(wi, -1);
+    const copyNextBtn = document.createElement('button');
+    copyNextBtn.className = 'copy-btn';
+    copyNextBtn.textContent = 'Copiar para a próxima semana →';
+    copyNextBtn.onclick = () => copyWeek(wi, 1);
+    head.appendChild(copyPrevBtn);
+    head.appendChild(copyNextBtn);
     panel.appendChild(head);
 
     const grid = document.createElement('div');
