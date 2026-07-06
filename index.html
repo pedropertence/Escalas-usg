@@ -420,6 +420,19 @@
     font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint);
     text-transform: uppercase; letter-spacing: 0.06em; margin: 1.6rem 0 0.7rem;
   }
+  .week-cat-table{ width:100%; border-collapse: collapse; font-size: 12.5px; }
+  .week-cat-table th, .week-cat-table td{
+    text-align:left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+  }
+  .week-cat-table th{
+    font-family: var(--font-mono); font-size: 10.5px; text-transform:uppercase;
+    letter-spacing:0.05em; color: var(--ink-faint); font-weight:500;
+  }
+  .week-cat-table td.wk-name{ font-family: var(--font-mono); color: var(--ink-dim); }
+  .week-cat-table td.r1{ color: var(--r1); }
+  .week-cat-table td.r2{ color: var(--r2); }
+  .week-cat-table td.r3{ color: var(--r3); }
+  .week-cat-table tr:last-child td{ border-bottom: none; }
 
   .foot-note{
     margin-top: 2rem; font-size: 12px; color: var(--ink-faint); line-height:1.6;
@@ -459,6 +472,8 @@
     <div class="bars" id="report-bars"></div>
     <div class="report-subhead">Por categoria</div>
     <div class="bars" id="report-categories"></div>
+    <div class="report-subhead">Por semana e categoria</div>
+    <div class="bars" id="report-weekly-category"></div>
   </div>
 
   <div class="foot-note">
@@ -1194,6 +1209,25 @@ function renderReport(){
     `;
     catEl.appendChild(row);
   });
+
+  const weeklyEl = document.getElementById('report-weekly-category');
+  const hasUncategorized = state.residents.some(r => !r.category);
+  let tableHtml = `<table class="week-cat-table"><thead><tr>
+      <th>Semana</th><th>R1</th><th>R2</th><th>R3</th>${hasUncategorized ? '<th>Sem cat.</th>' : ''}
+    </tr></thead><tbody>`;
+  weeks.forEach(week => {
+    const weekCounts = countsForWeeks([week]).counts;
+    const weekCat = categoryTotals(weekCounts);
+    tableHtml += `<tr>
+      <td class="wk-name">${week.label} (${week.range})</td>
+      <td class="r1">${weekCat.r1}</td>
+      <td class="r2">${weekCat.r2}</td>
+      <td class="r3">${weekCat.r3}</td>
+      ${hasUncategorized ? `<td>${weekCat.sem}</td>` : ''}
+    </tr>`;
+  });
+  tableHtml += '</tbody></table>';
+  weeklyEl.innerHTML = tableHtml;
 }
 
 function renderAll(){
