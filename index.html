@@ -947,19 +947,21 @@ function toggleHoliday(dayKey, dayLabel){
   if(!state.holidays) state.holidays = {};
   const active = !!state.holidays[dayKey];
   if(active){
-    if(!confirm('Remover o feriado de ' + dayLabel + '? Voltará a ser possível adicionar agendas nesse dia.')) return;
+    if(!confirm('Remover o feriado de ' + dayLabel + '? Voltará a ser possível adicionar agendas e folgas nesse dia.')) return;
     pushUndoSnapshot();
     delete state.holidays[dayKey];
   } else {
-    if(!confirm('Marcar ' + dayLabel + ' como feriado? Não será possível adicionar novas agendas nesse dia.')) return;
+    if(!confirm('Marcar ' + dayLabel + ' como feriado? Não será possível adicionar agendas nem folgas nesse dia, e as folgas já marcadas nesse dia serão removidas.')) return;
     pushUndoSnapshot();
     state.holidays[dayKey] = true;
+    TURNOS.forEach(t => { state.folgas[cellKey(dayKey, t.key)] = []; });
   }
   saveState(); renderAll();
 }
 
 function toggleFolga(dayKey, turno, residentId){
   if(!requireAuth()) return;
+  if(isHoliday(dayKey)) return;
   pushUndoSnapshot();
   const list = getFolgas(dayKey, turno);
   const idx = list.indexOf(residentId);
@@ -1749,7 +1751,7 @@ function buildCell(dayKey, turno){
   if(isHoliday(dayKey)){
     const holidayNote = document.createElement('div');
     holidayNote.className = 'holiday-note';
-    holidayNote.textContent = '🎌 Feriado — sem novas agendas';
+    holidayNote.textContent = '🎌 Feriado — sem agendas nem folgas';
     frag.appendChild(holidayNote);
   } else {
     const addBtn = document.createElement('button');
@@ -1759,26 +1761,26 @@ function buildCell(dayKey, turno){
       addBtn.replaceWith(buildAddForm(dayKey, turno, addBtn));
     };
     frag.appendChild(addBtn);
-  }
 
-  const folgaList = getFolgas(dayKey, turno);
-  const folgaRow = document.createElement('div');
-  folgaRow.className = 'folga-row';
-  const folgaLabel = document.createElement('span');
-  folgaLabel.className = 'folga-label';
-  folgaLabel.textContent = 'Folga';
-  folgaRow.appendChild(folgaLabel);
-  state.residents.forEach(r => {
-    const active = folgaList.includes(r.id);
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'chip' + (active ? ' folga-active' : '');
-    chip.textContent = initials(r.name);
-    chip.title = r.name + (active ? ' (de folga — clique para remover)' : ' (clique para marcar folga)');
-    chip.onclick = () => toggleFolga(dayKey, turno, r.id);
-    folgaRow.appendChild(chip);
-  });
-  frag.appendChild(folgaRow);
+    const folgaList = getFolgas(dayKey, turno);
+    const folgaRow = document.createElement('div');
+    folgaRow.className = 'folga-row';
+    const folgaLabel = document.createElement('span');
+    folgaLabel.className = 'folga-label';
+    folgaLabel.textContent = 'Folga';
+    folgaRow.appendChild(folgaLabel);
+    state.residents.forEach(r => {
+      const active = folgaList.includes(r.id);
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip' + (active ? ' folga-active' : '');
+      chip.textContent = initials(r.name);
+      chip.title = r.name + (active ? ' (de folga — clique para remover)' : ' (clique para marcar folga)');
+      chip.onclick = () => toggleFolga(dayKey, turno, r.id);
+      folgaRow.appendChild(chip);
+    });
+    frag.appendChild(folgaRow);
+  }
 
   return frag;
 }
