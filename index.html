@@ -44,6 +44,7 @@
     font-family: var(--font-sans);
     min-height:100vh;
     padding: 0 0 4rem;
+    overflow-x: hidden;
   }
   a{color:var(--cyan);}
 
@@ -237,14 +238,25 @@
   }
   .copy-btn:hover{ color: var(--cyan); border-color: var(--cyan-dim); }
 
+  .grid-scroll{
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--line);
+  }
   .grid{
     display:grid;
     grid-template-columns: 70px repeat(5, minmax(150px, 1fr));
     gap: 1px;
     background: var(--line);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    overflow:hidden;
+  }
+  .cell-head, .turno-label{
+    position: sticky;
+  }
+  .cell-head:first-child, .turno-label{
+    left: 0;
+    z-index: 2;
   }
   .cell-head{
     background: var(--panel-2);
@@ -461,6 +473,31 @@
 
   ::-webkit-scrollbar{ height:6px; width:6px; }
   ::-webkit-scrollbar-thumb{ background: var(--line); border-radius: 3px; }
+
+  @media (max-width: 640px){
+    .hero{ padding: 1.6rem 1rem 1.6rem; }
+    h1{ font-size: 1.35rem; }
+    .sub{ font-size: 13.5px; }
+    .wrap{ padding: 1.5rem 1rem 0; }
+    .roster{ gap: 8px; }
+    .pill{ font-size: 12px; padding: 5px 6px; }
+    .pill .name{ max-width: 70px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .month-bar{ gap: 6px; }
+    .month-pill, .month-add-btn{ padding: 7px 12px; font-size: 12px; }
+    .tabs{ gap: 4px; }
+    .tab{ padding: 8px 12px; font-size: 12px; }
+    .week-head{ justify-content: flex-start; flex-wrap: wrap; gap: 6px; }
+    .copy-btn{ font-size: 11px; padding: 6px 10px; flex: 1 1 auto; }
+    .grid{ grid-template-columns: 54px repeat(5, minmax(136px, 1fr)); }
+    .cell{ min-height: 84px; padding: 8px; }
+    .cell-head{ padding: 8px 8px; }
+    .turno-label{ font-size: 10.5px; padding: 8px 0; }
+    .agenda{ padding: 6px 7px; }
+    .chip{ padding: 4px 7px; font-size: 11px; }
+    .report-grid{ grid-template-columns: repeat(2, 1fr); }
+    .bar-name{ width: 64px; font-size: 12px; }
+    .bar-folga{ width: 52px; font-size: 10px; }
+  }
 </style>
 </head>
 <body>
@@ -1010,6 +1047,9 @@ function renderWeeks(){
     head.appendChild(copyNextBtn);
     panel.appendChild(head);
 
+    const gridScroll = document.createElement('div');
+    gridScroll.className = 'grid-scroll';
+
     const grid = document.createElement('div');
     grid.className = 'grid';
 
@@ -1028,7 +1068,8 @@ function renderWeeks(){
       });
     });
 
-    panel.appendChild(grid);
+    panel.appendChild(gridScroll);
+    gridScroll.appendChild(grid);
     el.appendChild(panel);
   });
 }
