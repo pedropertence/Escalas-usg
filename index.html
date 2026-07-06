@@ -532,6 +532,33 @@
     border: 1px solid var(--r3-dim); border-radius: 7px;
     padding: 9px 12px; margin-bottom: 12px; line-height: 1.5;
   }
+  .r3-modal-overlay{
+    display:none; position:fixed; inset:0; z-index:999;
+    background: rgba(3,13,16,0.82);
+    align-items:center; justify-content:center; padding: 20px;
+  }
+  .r3-modal-overlay.active{ display:flex; }
+  .r3-modal-box{
+    background: var(--panel); border: 2px solid var(--r3); border-radius: 14px;
+    padding: 28px 26px; max-width: 380px; width:100%; text-align:center;
+    box-shadow: 0 0 0 6px var(--r3-bg), 0 20px 60px rgba(0,0,0,0.5);
+    animation: r3-pop .25s ease;
+  }
+  @keyframes r3-pop{ from{ transform:scale(0.85); opacity:0; } to{ transform:scale(1); opacity:1; } }
+  .r3-modal-icons{ font-size: 34px; margin-bottom: 10px; letter-spacing: 2px; }
+  .r3-modal-text{
+    font-family: var(--font-mono); font-size: 16px; font-weight:600;
+    color: var(--ink); margin-bottom: 20px; line-height:1.4;
+  }
+  .r3-modal-actions{ display:flex; flex-direction:column; gap:10px; }
+  .r3-modal-btn{
+    font-family: var(--font-mono); font-size: 13px; font-weight:600;
+    padding: 11px 16px; border-radius: 9px; cursor:pointer; border: none;
+  }
+  .r3-modal-btn.yes{ background: var(--r3-dim); color: var(--r3); border: 1px solid var(--r3); }
+  .r3-modal-btn.yes:hover{ background: var(--r3); color: var(--bg-deep); }
+  .r3-modal-btn.no{ background: var(--r1-dim); color: var(--r1); border: 1px solid var(--r1-dim); }
+  .r3-modal-btn.no:hover{ background: var(--r1); color: var(--bg-deep); }
   .week-cat-table{ width:100%; border-collapse: collapse; font-size: 12.5px; }
   .week-cat-table th, .week-cat-table td{
     text-align:left; padding: 8px 10px; border-bottom: 1px solid var(--line);
@@ -641,6 +668,17 @@
 
   <div class="foot-note">
     Os dados são salvos no Firebase e sincronizados em tempo real — qualquer residente que abrir este site vê e edita a mesma escala, e as mudanças aparecem para todos automaticamente. O relatório da semana mostra a semana selecionada acima; o relatório mensal compila todas as semanas do mês.
+  </div>
+</div>
+
+<div class="r3-modal-overlay" id="r3-modal-overlay">
+  <div class="r3-modal-box">
+    <div class="r3-modal-icons">🚨⚠️🚨⚠️🚨</div>
+    <div class="r3-modal-text">Tem certeza que você quer espetar um R3?</div>
+    <div class="r3-modal-actions">
+      <button id="r3-modal-yes" class="r3-modal-btn yes">Sim, vou espetar um R3</button>
+      <button id="r3-modal-no" class="r3-modal-btn no">Não, descansa meu R3</button>
+    </div>
   </div>
 </div>
 
@@ -821,6 +859,23 @@ function requireAuth(){
     return false;
   }
   return true;
+}
+
+function confirmR3Assignment(){
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('r3-modal-overlay');
+    const yesBtn = document.getElementById('r3-modal-yes');
+    const noBtn = document.getElementById('r3-modal-no');
+    overlay.classList.add('active');
+    function cleanup(result){
+      overlay.classList.remove('active');
+      yesBtn.onclick = null;
+      noBtn.onclick = null;
+      resolve(result);
+    }
+    yesBtn.onclick = () => cleanup(true);
+    noBtn.onclick = () => cleanup(false);
+  });
 }
 
 function renderAuthBar(){
@@ -1738,11 +1793,16 @@ function buildCell(dayKey, turno){
       chip.className = 'chip' + (active ? ' active' + (r.category ? ' ' + r.category : '') : '');
       chip.textContent = initials(r.name);
       chip.title = r.name + (active ? ' (atribuído — clique para remover)' : ' (clique para atribuir)');
-      chip.onclick = () => {
+      chip.onclick = async () => {
         if(!requireAuth()) return;
-        pushUndoSnapshot();
         const cur = ag.residentIds || (ag.residentIds = []);
         const idx = cur.indexOf(r.id);
+        const isAdding = idx === -1;
+        if(isAdding && r.category === 'r3'){
+          const ok = await confirmR3Assignment();
+          if(!ok) return;
+        }
+        pushUndoSnapshot();
         if(idx > -1) cur.splice(idx, 1); else cur.push(r.id);
         saveState(); renderAll();
       };
@@ -1902,7 +1962,7 @@ function renderReport(){
       el.innerHTML = '<div class="empty-note">Nenhum residente nesta categoria.</div>';
       return;
     }
-    if(categoryKey === 'r3' && members.some(r => (counts[r.id] || 0) > 0)){
+    if(categoryKey === 'r3'){
       const warn = document.createElement('div');
       warn.className = 'r3-warning';
       warn.textContent = '⚠ Caso alguém tenha trabalhado durante a semana, algo está errado — descansem, meus R3s lindos e maravilhosos.';
@@ -1970,7 +2030,7 @@ function renderMonthlyReport(){
       el.innerHTML = '<div class="empty-note">Nenhum residente nesta categoria.</div>';
       return;
     }
-    if(categoryKey === 'r3' && members.some(r => (counts[r.id] || 0) > 0)){
+    if(categoryKey === 'r3'){
       const warn = document.createElement('div');
       warn.className = 'r3-warning';
       warn.textContent = '⚠ Caso alguém tenha trabalhado durante o mês, algo está errado — descansem, meus R3s lindos e maravilhosos.';
