@@ -527,6 +527,11 @@
   .bars .empty-note{
     font-size: 12.5px; color: var(--ink-faint); padding: 2px 0;
   }
+  .r3-warning{
+    font-size: 12.5px; color: var(--r3); background: var(--r3-bg);
+    border: 1px solid var(--r3-dim); border-radius: 7px;
+    padding: 9px 12px; margin-bottom: 12px; line-height: 1.5;
+  }
   .week-cat-table{ width:100%; border-collapse: collapse; font-size: 12.5px; }
   .week-cat-table th, .week-cat-table td{
     text-align:left; padding: 8px 10px; border-bottom: 1px solid var(--line);
@@ -1897,6 +1902,12 @@ function renderReport(){
       el.innerHTML = '<div class="empty-note">Nenhum residente nesta categoria.</div>';
       return;
     }
+    if(categoryKey === 'r3' && members.some(r => (counts[r.id] || 0) > 0)){
+      const warn = document.createElement('div');
+      warn.className = 'r3-warning';
+      warn.textContent = '⚠ Caso alguém tenha trabalhado durante a semana, algo está errado — descansem, meus R3s lindos e maravilhosos.';
+      el.appendChild(warn);
+    }
     const groupMax = Math.max(...members.map(r => counts[r.id] || 0), 1);
     members.forEach(r => {
       const c = counts[r.id] || 0;
@@ -1958,6 +1969,12 @@ function renderMonthlyReport(){
     if(members.length === 0){
       el.innerHTML = '<div class="empty-note">Nenhum residente nesta categoria.</div>';
       return;
+    }
+    if(categoryKey === 'r3' && members.some(r => (counts[r.id] || 0) > 0)){
+      const warn = document.createElement('div');
+      warn.className = 'r3-warning';
+      warn.textContent = '⚠ Caso alguém tenha trabalhado durante o mês, algo está errado — descansem, meus R3s lindos e maravilhosos.';
+      el.appendChild(warn);
     }
     const groupMax = Math.max(...members.map(r => counts[r.id] || 0), 1);
     members.forEach(r => {
