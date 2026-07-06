@@ -303,14 +303,18 @@
     border-radius: 5px;
     padding: 4px 5px;
   }
-  .agenda.assigned select{ color: var(--cyan); border-color: var(--cyan-dim); }
+  .agenda select.type-select{ font-size: 11px; margin-bottom: 1px; }
+  .agenda select.type-select.modo_b{ color: var(--r1); border-color: var(--r1-dim); }
+  .agenda select.type-select.doppler{ color: var(--r2); border-color: var(--r2-dim); }
+  .agenda select.type-select.especial{ color: var(--r3); border-color: var(--r3-dim); }
+  .agenda.assigned select.resident-select{ color: var(--cyan); border-color: var(--cyan-dim); }
   .agenda.assigned{ border-color: var(--cyan-dim); }
   .agenda.assigned.cat-r1{ border-color: var(--r1-dim); background: var(--r1-bg); }
-  .agenda.assigned.cat-r1 select{ color: var(--r1); border-color: var(--r1-dim); }
+  .agenda.assigned.cat-r1 select.resident-select{ color: var(--r1); border-color: var(--r1-dim); }
   .agenda.assigned.cat-r2{ border-color: var(--r2-dim); background: var(--r2-bg); }
-  .agenda.assigned.cat-r2 select{ color: var(--r2); border-color: var(--r2-dim); }
+  .agenda.assigned.cat-r2 select.resident-select{ color: var(--r2); border-color: var(--r2-dim); }
   .agenda.assigned.cat-r3{ border-color: var(--r3-dim); background: var(--r3-bg); }
-  .agenda.assigned.cat-r3 select{ color: var(--r3); border-color: var(--r3-dim); }
+  .agenda.assigned.cat-r3 select.resident-select{ color: var(--r3); border-color: var(--r3-dim); }
   .add-btn{
     font-family: var(--font-mono);
     font-size: 11.5px;
@@ -391,6 +395,13 @@
   .bar-fill{ height:100%; background: var(--cyan); border-radius:4px; transition: width .4s ease; }
   .bar-fill.amber{ background: var(--amber); }
   .bar-val{ width: 26px; text-align:right; font-family: var(--font-mono); font-size:13px; color: var(--ink); flex-shrink:0; }
+  .bar-fill.r1{ background: var(--r1); }
+  .bar-fill.r2{ background: var(--r2); }
+  .bar-fill.r3{ background: var(--r3); }
+  .report-subhead{
+    font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint);
+    text-transform: uppercase; letter-spacing: 0.06em; margin: 1.6rem 0 0.7rem;
+  }
 
   .foot-note{
     margin-top: 2rem; font-size: 12px; color: var(--ink-faint); line-height:1.6;
@@ -428,6 +439,8 @@
   <div class="report" id="report">
     <div class="report-grid" id="report-stats"></div>
     <div class="bars" id="report-bars"></div>
+    <div class="report-subhead">Por categoria</div>
+    <div class="bars" id="report-categories"></div>
   </div>
 
   <div class="foot-note">
@@ -451,6 +464,12 @@ const CATEGORIES = [
   { key:'r1', label:'R1' },
   { key:'r2', label:'R2' },
   { key:'r3', label:'R3' },
+];
+
+const AGENDA_TYPES = [
+  { key:'modo_b', label:'Modo B' },
+  { key:'doppler', label:'Doppler' },
+  { key:'especial', label:'Especial' },
 ];
 
 function getResident(id){
@@ -625,6 +644,16 @@ function countsForWeeks(weeks){
   return { counts, assigned, total };
 }
 
+function categoryTotals(counts){
+  const totals = { r1:0, r2:0, r3:0, sem:0 };
+  state.residents.forEach(r => {
+    const c = counts[r.id] || 0;
+    if(r.category && totals[r.category] !== undefined) totals[r.category] += c;
+    else totals.sem += c;
+  });
+  return totals;
+}
+
 function addResident(name, category){
   const trimmed = name.trim();
   if(!trimmed) return;
@@ -684,7 +713,7 @@ function copyWeekForward(weekIndex){
     TURNOS.forEach(t => {
       const srcList = getAgendas(day.key, t.key);
       const destList = getAgendas(targetDay.key, t.key);
-      srcList.forEach(ag => destList.push({ id: uid(), title: ag.title, residentId: null }));
+      srcList.forEach(ag => destList.push({ id: uid(), title: ag.title, residentId: null, type: ag.type || null }));
     });
   });
   saveState(); renderAll();
@@ -831,6 +860,14 @@ function agendaOptionsHtml(selectedId){
   return html;
 }
 
+function typeOptionsHtml(selectedType){
+  let html = `<option value="">— tipo —</option>`;
+  AGENDA_TYPES.forEach(t => {
+    html += `<option value="${t.key}" ${t.key === selectedType ? 'selected' : ''}>${t.label}</option>`;
+  });
+  return html;
+}
+
 function renderWeeks(){
   const weeks = getWeeksForMonthKey(state.activeMonth);
   const el = document.getElementById('weeks');
@@ -938,7 +975,17 @@ function buildCell(dayKey, turno){
     titleRow.appendChild(actions);
     box.appendChild(titleRow);
 
+    const typeSelect = document.createElement('select');
+    typeSelect.className = 'type-select' + (ag.type ? ' ' + ag.type : '');
+    typeSelect.innerHTML = typeOptionsHtml(ag.type);
+    typeSelect.onchange = (e) => {
+      ag.type = e.target.value || null;
+      saveState(); renderAll();
+    };
+    box.appendChild(typeSelect);
+
     const select = document.createElement('select');
+    select.className = 'resident-select';
     select.innerHTML = agendaOptionsHtml(ag.residentId);
     select.onchange = (e) => {
       ag.residentId = e.target.value || null;
@@ -966,6 +1013,14 @@ function buildAddForm(dayKey, turno, originalBtn){
   input.placeholder = 'ex.: Abdome total 14h';
   form.appendChild(input);
 
+  const typeSelect = document.createElement('select');
+  typeSelect.className = 'type-select modo_b';
+  typeSelect.innerHTML = AGENDA_TYPES.map(t => `<option value="${t.key}">${t.label}</option>`).join('');
+  typeSelect.onchange = () => {
+    typeSelect.className = 'type-select' + (typeSelect.value ? ' ' + typeSelect.value : '');
+  };
+  form.appendChild(typeSelect);
+
   const row = document.createElement('div');
   row.className = 'row';
   const cancel = document.createElement('button');
@@ -977,7 +1032,7 @@ function buildAddForm(dayKey, turno, originalBtn){
   ok.onclick = () => {
     const title = input.value.trim();
     if(!title) return;
-    getAgendas(dayKey, turno).push({ id: uid(), title, residentId: null });
+    getAgendas(dayKey, turno).push({ id: uid(), title, residentId: null, type: typeSelect.value || null });
     saveState(); renderAll();
   };
   row.appendChild(cancel);
@@ -1019,6 +1074,29 @@ function renderReport(){
       <div class="bar-val">${c}</div>
     `;
     barsEl.appendChild(row);
+  });
+
+  const catTotals = categoryTotals(counts);
+  const catEl = document.getElementById('report-categories');
+  catEl.innerHTML = '';
+  const catMax = Math.max(catTotals.r1, catTotals.r2, catTotals.r3, catTotals.sem, 1);
+  const catRows = [
+    { key:'r1', label:'R1', cls:'r1' },
+    { key:'r2', label:'R2', cls:'r2' },
+    { key:'r3', label:'R3', cls:'r3' },
+  ];
+  if(catTotals.sem > 0) catRows.push({ key:'sem', label:'Sem categoria', cls:'' });
+  catRows.forEach(cr => {
+    const c = catTotals[cr.key];
+    const pct = Math.round((c / catMax) * 100);
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.innerHTML = `
+      <div class="bar-name">${cr.label}</div>
+      <div class="bar-track"><div class="bar-fill ${cr.cls}" style="width:${pct}%"></div></div>
+      <div class="bar-val">${c}</div>
+    `;
+    catEl.appendChild(row);
   });
 }
 
