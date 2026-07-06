@@ -1045,24 +1045,117 @@ function toggleWeekLock(weekIndex){
   saveState(); renderAll();
 }
 
+function buildExportRow(label, value, color){
+  const row = document.createElement('div');
+  row.style.cssText = 'font-size:11.5px; margin-top:2px;';
+  const labelSpan = document.createElement('span');
+  labelSpan.style.cssText = 'color:' + (color || '#8fb4b0') + ';';
+  labelSpan.textContent = value;
+  row.appendChild(labelSpan);
+  return row;
+}
+
+function buildCleanExportNode(weekIndex){
+  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const week = weeks[weekIndex];
+
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'position:fixed; left:-99999px; top:0; background:#08181c; padding:24px; width:1080px; font-family:"IBM Plex Sans",sans-serif; color:#e7f4f1;';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-family:"IBM Plex Mono",monospace; font-size:17px; margin-bottom:16px;';
+  title.textContent = 'Escala USG — ' + formatMonthLabel(state.activeMonth) + ' · ' + week.label + ' (' + week.range + ')';
+  wrapper.appendChild(title);
+
+  const table = document.createElement('table');
+  table.style.cssText = 'width:100%; border-collapse:collapse; table-layout:fixed;';
+
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  const corner = document.createElement('th');
+  corner.style.cssText = 'width:70px; padding:8px; border:1px solid #1d434c; background:#123039;';
+  headRow.appendChild(corner);
+  week.days.forEach(day => {
+    const th = document.createElement('th');
+    th.style.cssText = 'padding:8px; border:1px solid #1d434c; background:#123039; font-family:"IBM Plex Mono",monospace; font-size:12.5px; text-align:left;';
+    const strong = document.createElement('div');
+    strong.style.cssText = 'font-weight:600;';
+    strong.textContent = day.label;
+    const small = document.createElement('div');
+    small.style.cssText = 'color:#8fb4b0; font-weight:400; font-size:11px;';
+    small.textContent = day.date;
+    th.appendChild(strong);
+    th.appendChild(small);
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  TURNOS.forEach(turno => {
+    const row = document.createElement('tr');
+    const turnoTd = document.createElement('td');
+    turnoTd.style.cssText = 'padding:8px; border:1px solid #1d434c; background:#123039; font-family:"IBM Plex Mono",monospace; font-size:11.5px; font-weight:600; vertical-align:top; text-transform:uppercase;';
+    turnoTd.textContent = turno.label;
+    row.appendChild(turnoTd);
+
+    week.days.forEach(day => {
+      const td = document.createElement('td');
+      td.style.cssText = 'padding:8px; border:1px solid #1d434c; vertical-align:top;';
+
+      const list = getAgendas(day.key, turno.key);
+      if(list.length === 0){
+        const dash = document.createElement('div');
+        dash.style.cssText = 'color:#557a78; font-size:12px;';
+        dash.textContent = '—';
+        td.appendChild(dash);
+      } else {
+        list.forEach((ag, idx) => {
+          const item = document.createElement('div');
+          item.style.cssText = 'margin-bottom:8px;' + (idx > 0 ? 'padding-top:8px; border-top:1px solid #1d434c;' : '');
+
+          const titleLine = document.createElement('div');
+          titleLine.style.cssText = 'font-size:13px; font-weight:600; color:#e7f4f1;';
+          titleLine.textContent = ag.title;
+          item.appendChild(titleLine);
+
+          const typeInfo = AGENDA_TYPES.find(t => t.key === ag.type);
+          const typeColor = ag.type === 'modo_b' ? '#7fd858' : ag.type === 'doppler' ? '#f2c94c' : ag.type === 'especial' ? '#e2584f' : '#557a78';
+          item.appendChild(buildExportRow('tipo', typeInfo ? typeInfo.label : '—', typeColor));
+
+          const residentNames = (ag.residentIds || [])
+            .map(id => { const r = getResident(id); return r ? r.name : null; })
+            .filter(Boolean).join(', ') || 'Livre';
+          item.appendChild(buildExportRow('residente', residentNames, '#e7f4f1'));
+
+          td.appendChild(item);
+        });
+      }
+
+      const folgaIds = getFolgas(day.key, turno.key);
+      if(folgaIds.length > 0){
+        const folgaNames = folgaIds.map(id => { const r = getResident(id); return r ? r.name : null; }).filter(Boolean).join(', ');
+        const folgaLine = document.createElement('div');
+        folgaLine.style.cssText = 'margin-top:8px; padding-top:8px; border-top:1px dashed #5f3128; font-size:11px; color:#e8836b;';
+        folgaLine.textContent = 'Folga: ' + folgaNames;
+        td.appendChild(folgaLine);
+      }
+
+      row.appendChild(td);
+    });
+    tbody.appendChild(row);
+  });
+  table.appendChild(tbody);
+  wrapper.appendChild(table);
+
+  document.body.appendChild(wrapper);
+  return wrapper;
+}
+
 async function captureWeekCanvas(weekIndex){
   const weeks = getWeeksForMonthKey(state.activeMonth);
   const week = weeks[weekIndex];
-  const panels = document.querySelectorAll('.week-panel');
-  const sourceGrid = panels[weekIndex].querySelector('.grid-scroll');
-  const clone = sourceGrid.cloneNode(true);
-  clone.classList.add('export-clean');
-  clone.style.overflow = 'visible';
-  clone.style.width = 'max-content';
-
-  const wrapper = document.createElement('div');
-  wrapper.style.cssText = 'position:fixed; left:-99999px; top:0; background:#08181c; padding:22px; display:inline-block;';
-  const title = document.createElement('div');
-  title.style.cssText = 'font-family:"IBM Plex Mono",monospace; font-size:16px; color:#e7f4f1; margin-bottom:14px;';
-  title.textContent = 'Escala USG — ' + formatMonthLabel(state.activeMonth) + ' · ' + week.label + ' (' + week.range + ')';
-  wrapper.appendChild(title);
-  wrapper.appendChild(clone);
-  document.body.appendChild(wrapper);
+  const wrapper = buildCleanExportNode(weekIndex);
 
   let canvas;
   try{
