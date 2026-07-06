@@ -420,6 +420,12 @@
     font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint);
     text-transform: uppercase; letter-spacing: 0.06em; margin: 1.6rem 0 0.7rem;
   }
+  .report-subhead.cat-head.r1{ color: var(--r1); }
+  .report-subhead.cat-head.r2{ color: var(--r2); }
+  .report-subhead.cat-head.r3{ color: var(--r3); }
+  .bars .empty-note{
+    font-size: 12.5px; color: var(--ink-faint); padding: 2px 0;
+  }
   .week-cat-table{ width:100%; border-collapse: collapse; font-size: 12.5px; }
   .week-cat-table th, .week-cat-table td{
     text-align:left; padding: 8px 10px; border-bottom: 1px solid var(--line);
@@ -463,21 +469,24 @@
   <div id="weeks"></div>
 
   <div class="report-toggle">
-    <button id="report-btn">Ver relatório mensal ↓</button>
+    <button id="report-btn">Ver relatório da semana ↓</button>
     <div class="line"></div>
   </div>
 
   <div class="report" id="report">
     <div class="report-grid" id="report-stats"></div>
-    <div class="bars" id="report-bars"></div>
-    <div class="report-subhead">Por categoria</div>
-    <div class="bars" id="report-categories"></div>
-    <div class="report-subhead">Por semana e categoria</div>
-    <div class="bars" id="report-weekly-category"></div>
+    <div class="report-subhead cat-head r1">R1</div>
+    <div class="bars" id="report-r1"></div>
+    <div class="report-subhead cat-head r2">R2</div>
+    <div class="bars" id="report-r2"></div>
+    <div class="report-subhead cat-head r3">R3</div>
+    <div class="bars" id="report-r3"></div>
+    <div class="report-subhead" id="report-sem-head">Sem categoria</div>
+    <div class="bars" id="report-sem"></div>
   </div>
 
   <div class="foot-note">
-    Os dados são salvos no Firebase e sincronizados em tempo real — qualquer residente que abrir este site vê e edita a mesma escala, e as mudanças aparecem para todos automaticamente. O contador e o relatório consideram o mês selecionado acima.
+    Os dados são salvos no Firebase e sincronizados em tempo real — qualquer residente que abrir este site vê e edita a mesma escala, e as mudanças aparecem para todos automaticamente. O relatório mostra a semana selecionada acima.
   </div>
 </div>
 
@@ -1157,8 +1166,9 @@ function buildAddForm(dayKey, turno, originalBtn){
 }
 
 function renderReport(){
-  const weeks = getWeeksForMonthKey(state.activeMonth);
-  const { counts, assigned, total } = countsForWeeks(weeks);
+  const allWeeks = getWeeksForMonthKey(state.activeMonth);
+  const week = allWeeks[activeWeekIndex] || allWeeks[0];
+  const { counts, assigned, total } = countsForWeeks([week]);
   const statsEl = document.getElementById('report-stats');
   const vals = Object.values(counts);
   const max = vals.length ? Math.max(...vals, 1) : 1;
@@ -1166,68 +1176,51 @@ function renderReport(){
   const spread = max - min;
 
   statsEl.innerHTML = `
+    <div class="stat"><div class="label">Semana</div><div class="val" style="font-size:15px">${week.label}</div></div>
     <div class="stat"><div class="label">Total de agendas</div><div class="val">${total}</div></div>
     <div class="stat"><div class="label">Atribuídas</div><div class="val">${assigned}</div></div>
     <div class="stat"><div class="label">Livres</div><div class="val ${total-assigned>0?'amber':''}">${total - assigned}</div></div>
-    <div class="stat"><div class="label">Diferença máx. entre residentes</div><div class="val ${spread>1?'amber':''}">${spread}</div></div>
+    <div class="stat"><div class="label">Diferença máx.</div><div class="val ${spread>1?'amber':''}">${spread}</div></div>
   `;
 
-  const barsEl = document.getElementById('report-bars');
-  barsEl.innerHTML = '';
-  state.residents.forEach(r => {
-    const c = counts[r.id] || 0;
-    const pct = max > 0 ? Math.round((c / max) * 100) : 0;
-    const row = document.createElement('div');
-    row.className = 'bar-row';
-    row.innerHTML = `
-      <div class="bar-name">${r.name}</div>
-      <div class="bar-track"><div class="bar-fill${c===min && spread>0 ? ' amber' : ''}" style="width:${pct}%"></div></div>
-      <div class="bar-val">${c}</div>
-    `;
-    barsEl.appendChild(row);
-  });
+  function renderGroup(containerId, categoryKey){
+    const el = document.getElementById(containerId);
+    el.innerHTML = '';
+    const members = state.residents.filter(r => (r.category || null) === categoryKey);
+    if(members.length === 0){
+      el.innerHTML = '<div class="empty-note">Nenhum residente nesta categoria.</div>';
+      return;
+    }
+    const groupMax = Math.max(...members.map(r => counts[r.id] || 0), 1);
+    members.forEach(r => {
+      const c = counts[r.id] || 0;
+      const pct = Math.round((c / groupMax) * 100);
+      const row = document.createElement('div');
+      row.className = 'bar-row';
+      row.innerHTML = `
+        <div class="bar-name">${r.name}</div>
+        <div class="bar-track"><div class="bar-fill${categoryKey ? ' ' + categoryKey : ''}" style="width:${pct}%"></div></div>
+        <div class="bar-val">${c}</div>
+      `;
+      el.appendChild(row);
+    });
+  }
 
-  const catTotals = categoryTotals(counts);
-  const catEl = document.getElementById('report-categories');
-  catEl.innerHTML = '';
-  const catMax = Math.max(catTotals.r1, catTotals.r2, catTotals.r3, catTotals.sem, 1);
-  const catRows = [
-    { key:'r1', label:'R1', cls:'r1' },
-    { key:'r2', label:'R2', cls:'r2' },
-    { key:'r3', label:'R3', cls:'r3' },
-  ];
-  if(catTotals.sem > 0) catRows.push({ key:'sem', label:'Sem categoria', cls:'' });
-  catRows.forEach(cr => {
-    const c = catTotals[cr.key];
-    const pct = Math.round((c / catMax) * 100);
-    const row = document.createElement('div');
-    row.className = 'bar-row';
-    row.innerHTML = `
-      <div class="bar-name">${cr.label}</div>
-      <div class="bar-track"><div class="bar-fill ${cr.cls}" style="width:${pct}%"></div></div>
-      <div class="bar-val">${c}</div>
-    `;
-    catEl.appendChild(row);
-  });
+  renderGroup('report-r1', 'r1');
+  renderGroup('report-r2', 'r2');
+  renderGroup('report-r3', 'r3');
 
-  const weeklyEl = document.getElementById('report-weekly-category');
   const hasUncategorized = state.residents.some(r => !r.category);
-  let tableHtml = `<table class="week-cat-table"><thead><tr>
-      <th>Semana</th><th>R1</th><th>R2</th><th>R3</th>${hasUncategorized ? '<th>Sem cat.</th>' : ''}
-    </tr></thead><tbody>`;
-  weeks.forEach(week => {
-    const weekCounts = countsForWeeks([week]).counts;
-    const weekCat = categoryTotals(weekCounts);
-    tableHtml += `<tr>
-      <td class="wk-name">${week.label} (${week.range})</td>
-      <td class="r1">${weekCat.r1}</td>
-      <td class="r2">${weekCat.r2}</td>
-      <td class="r3">${weekCat.r3}</td>
-      ${hasUncategorized ? `<td>${weekCat.sem}</td>` : ''}
-    </tr>`;
-  });
-  tableHtml += '</tbody></table>';
-  weeklyEl.innerHTML = tableHtml;
+  const semHead = document.getElementById('report-sem-head');
+  const semEl = document.getElementById('report-sem');
+  if(hasUncategorized){
+    semHead.style.display = '';
+    semEl.style.display = '';
+    renderGroup('report-sem', null);
+  } else {
+    semHead.style.display = 'none';
+    semEl.style.display = 'none';
+  }
 }
 
 function renderAll(){
@@ -1242,7 +1235,7 @@ document.getElementById('report-btn').addEventListener('click', () => {
   const rep = document.getElementById('report');
   const btn = document.getElementById('report-btn');
   const isActive = rep.classList.toggle('active');
-  btn.textContent = isActive ? 'Ocultar relatório mensal ↑' : 'Ver relatório mensal ↓';
+  btn.textContent = isActive ? 'Ocultar relatório da semana ↑' : 'Ver relatório da semana ↓';
 });
 
 initFirebase();
