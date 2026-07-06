@@ -278,7 +278,25 @@
     border-radius: 7px;
     padding: 7px 8px;
     display:flex; flex-direction:column; gap:5px;
+    cursor: grab;
   }
+  .agenda.dragging{ opacity: 0.4; }
+  .agenda.drag-over{ box-shadow: 0 0 0 1px var(--cyan) inset; border-color: var(--cyan-dim); }
+  .drag-handle{
+    color: var(--ink-faint); font-size: 11px; margin-right: 2px; flex-shrink:0;
+    line-height:1; user-select:none;
+  }
+  .resident-chips{ display:flex; flex-wrap:wrap; gap:4px; }
+  .chip{
+    font-family: var(--font-mono); font-size: 10.5px; font-weight:600;
+    padding: 3px 6px; border-radius: 999px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink-faint); cursor:pointer;
+  }
+  .chip:hover{ border-color: var(--ink-faint); color: var(--ink-dim); }
+  .chip.active{ background: var(--cyan-dim); color: var(--cyan); border-color: var(--cyan-dim); }
+  .chip.active.r1{ background: var(--r1-dim); color: var(--r1); border-color: var(--r1-dim); }
+  .chip.active.r2{ background: var(--r2-dim); color: var(--r2); border-color: var(--r2-dim); }
+  .chip.active.r3{ background: var(--r3-dim); color: var(--r3); border-color: var(--r3-dim); }
   .agenda .title{ font-size:12.5px; color:var(--ink); display:flex; justify-content:space-between; gap:6px; align-items:flex-start;}
   .agenda .title span.txt{ line-height:1.35; cursor:text; }
   .agenda .title .actions{ display:flex; gap:2px; flex-shrink:0; }
@@ -552,11 +570,15 @@ function migrateState(raw){
   const agendas = {};
   Object.keys(old.agendas || {}).forEach(k => {
     const m = k.match(/^(d\d_\d)_(manha|tarde)$/);
-    if(m && OLD_KEY_MAP[m[1]]){
-      agendas[OLD_KEY_MAP[m[1]] + '_' + m[2]] = old.agendas[k];
-    } else {
-      agendas[k] = old.agendas[k];
-    }
+    const targetKey = (m && OLD_KEY_MAP[m[1]]) ? OLD_KEY_MAP[m[1]] + '_' + m[2] : k;
+    const list = (old.agendas[k] || []).map(ag => {
+      let residentIds = ag.residentIds;
+      if(!residentIds){
+        residentIds = ag.residentId ? [ag.residentId] : [];
+      }
+      return { id: ag.id, title: ag.title, type: ag.type || null, residentIds };
+    });
+    agendas[targetKey] = list;
   });
   const monthsCreated = old.monthsCreated && old.monthsCreated.length
     ? old.monthsCreated
@@ -573,6 +595,7 @@ function migrateState(raw){
 
 let state = migrateState(null);
 let activeWeekIndex = 0;
+let dragSource = null;
 let db, docRef;
 
 function setConn(status, text){
@@ -633,9 +656,10 @@ function countsForWeeks(weeks){
       TURNOS.forEach(t => {
         getAgendas(day.key, t.key).forEach(ag => {
           total += 1;
-          if(ag.residentId){
+          const ids = ag.residentIds || [];
+          if(ids.length > 0){
             assigned += 1;
-            if(counts[ag.residentId] !== undefined) counts[ag.residentId] += 1;
+            ids.forEach(rid => { if(counts[rid] !== undefined) counts[rid] += 1; });
           }
         });
       });
@@ -674,7 +698,12 @@ function removeResident(id){
   if(!r) return;
   if(!confirm('Remover ' + r.name + '? Os turnos já atribuídos a essa pessoa ficarão livres.')) return;
   Object.values(state.agendas).forEach(list => {
-    list.forEach(ag => { if(ag.residentId === id) ag.residentId = null; });
+    list.forEach(ag => {
+      if(ag.residentIds){
+        const idx = ag.residentIds.indexOf(id);
+        if(idx > -1) ag.residentIds.splice(idx, 1);
+      }
+    });
   });
   state.residents = state.residents.filter(x => x.id !== id);
   saveState(); renderAll();
@@ -713,7 +742,7 @@ function copyWeekForward(weekIndex){
     TURNOS.forEach(t => {
       const srcList = getAgendas(day.key, t.key);
       const destList = getAgendas(targetDay.key, t.key);
-      srcList.forEach(ag => destList.push({ id: uid(), title: ag.title, residentId: null, type: ag.type || null }));
+      srcList.forEach(ag => destList.push({ id: uid(), title: ag.title, residentIds: [], type: ag.type || null }));
     });
   });
   saveState(); renderAll();
@@ -852,14 +881,6 @@ function renderTabs(){
   });
 }
 
-function agendaOptionsHtml(selectedId){
-  let html = `<option value="">— Livre —</option>`;
-  state.residents.forEach(r => {
-    html += `<option value="${r.id}" ${r.id === selectedId ? 'selected' : ''}>${r.name}</option>`;
-  });
-  return html;
-}
-
 function typeOptionsHtml(selectedType){
   let html = `<option value="">— tipo —</option>`;
   AGENDA_TYPES.forEach(t => {
@@ -920,13 +941,51 @@ function buildCell(dayKey, turno){
   const list = getAgendas(dayKey, turno);
 
   list.forEach(ag => {
-    const assignedResident = ag.residentId ? getResident(ag.residentId) : null;
-    const catClass = assignedResident && assignedResident.category ? ' cat-' + assignedResident.category : '';
+    const ids = ag.residentIds || [];
+    const singleResident = ids.length === 1 ? getResident(ids[0]) : null;
+    const catClass = singleResident && singleResident.category ? ' cat-' + singleResident.category : '';
     const box = document.createElement('div');
-    box.className = 'agenda' + (ag.residentId ? ' assigned' + catClass : '');
+    box.className = 'agenda' + (ids.length > 0 ? ' assigned' + catClass : '');
+    box.draggable = true;
+
+    box.addEventListener('dragstart', (e) => {
+      const tag = e.target.tagName;
+      if(tag === 'SELECT' || tag === 'INPUT' || tag === 'BUTTON'){ e.preventDefault(); return; }
+      dragSource = { dayKey, turno, id: ag.id };
+      box.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    box.addEventListener('dragend', () => {
+      box.classList.remove('dragging');
+      document.querySelectorAll('.agenda.drag-over').forEach(el => el.classList.remove('drag-over'));
+      dragSource = null;
+    });
+    box.addEventListener('dragover', (e) => {
+      if(!dragSource || dragSource.dayKey !== dayKey || dragSource.turno !== turno) return;
+      e.preventDefault();
+      box.classList.add('drag-over');
+    });
+    box.addEventListener('dragleave', () => box.classList.remove('drag-over'));
+    box.addEventListener('drop', (e) => {
+      e.preventDefault();
+      box.classList.remove('drag-over');
+      if(!dragSource || dragSource.dayKey !== dayKey || dragSource.turno !== turno) return;
+      const arr = getAgendas(dayKey, turno);
+      const fromIdx = arr.findIndex(a => a.id === dragSource.id);
+      const toIdx = arr.findIndex(a => a.id === ag.id);
+      if(fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+      const [moved] = arr.splice(fromIdx, 1);
+      arr.splice(toIdx, 0, moved);
+      saveState(); renderAll();
+    });
 
     const titleRow = document.createElement('div');
     titleRow.className = 'title';
+    const handle = document.createElement('span');
+    handle.className = 'drag-handle';
+    handle.textContent = '⠿';
+    handle.title = 'Arraste para reordenar';
+    titleRow.appendChild(handle);
     const span = document.createElement('span');
     span.className = 'txt';
     span.textContent = ag.title;
@@ -984,14 +1043,25 @@ function buildCell(dayKey, turno){
     };
     box.appendChild(typeSelect);
 
-    const select = document.createElement('select');
-    select.className = 'resident-select';
-    select.innerHTML = agendaOptionsHtml(ag.residentId);
-    select.onchange = (e) => {
-      ag.residentId = e.target.value || null;
-      saveState(); renderAll();
-    };
-    box.appendChild(select);
+    const chips = document.createElement('div');
+    chips.className = 'resident-chips';
+    state.residents.forEach(r => {
+      const active = ids.includes(r.id);
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip' + (active ? ' active' + (r.category ? ' ' + r.category : '') : '');
+      chip.textContent = initials(r.name);
+      chip.title = r.name + (active ? ' (atribuído — clique para remover)' : ' (clique para atribuir)');
+      chip.onclick = () => {
+        const cur = ag.residentIds || (ag.residentIds = []);
+        const idx = cur.indexOf(r.id);
+        if(idx > -1) cur.splice(idx, 1); else cur.push(r.id);
+        saveState(); renderAll();
+      };
+      chips.appendChild(chip);
+    });
+    box.appendChild(chips);
+
     frag.appendChild(box);
   });
 
@@ -1002,6 +1072,7 @@ function buildCell(dayKey, turno){
     addBtn.replaceWith(buildAddForm(dayKey, turno, addBtn));
   };
   frag.appendChild(addBtn);
+
 
   return frag;
 }
@@ -1032,7 +1103,7 @@ function buildAddForm(dayKey, turno, originalBtn){
   ok.onclick = () => {
     const title = input.value.trim();
     if(!title) return;
-    getAgendas(dayKey, turno).push({ id: uid(), title, residentId: null, type: typeSelect.value || null });
+    getAgendas(dayKey, turno).push({ id: uid(), title, residentIds: [], type: typeSelect.value || null });
     saveState(); renderAll();
   };
   row.appendChild(cancel);
