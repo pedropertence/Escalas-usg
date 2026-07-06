@@ -1,7 +1,16 @@
-# Escala USG — julho 2026
+# Escala USG
 
 Site estático (HTML puro) com dados sincronizados em tempo real via Firebase Firestore.
 Hospedagem gratuita no Vercel.
+
+## Funcionalidades
+
+- Escala semanal por turno (manhã/tarde), com agendas de USG cadastradas em cada turno.
+- Atribuição de residente por agenda, com contador de turnos cobertos e relatório mensal.
+- Renomear uma agenda depois de criada (ícone de lápis).
+- Copiar os títulos das agendas de uma semana para a semana seguinte (residentes não são copiados — o turno entra livre).
+- Criar a escala de um novo mês a qualquer momento (botão "+ novo mês"); as semanas são geradas automaticamente.
+- Adicionar ou remover residentes da equipe (botão "+ residente" e "×" em cada nome).
 
 ## 1. Criar o projeto no Firebase (gratuito)
 
