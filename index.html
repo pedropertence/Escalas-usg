@@ -110,6 +110,36 @@
   }
   #undo-btn:hover:not(:disabled){ color: var(--cyan); border-color: var(--cyan-dim); }
   #undo-btn:disabled{ opacity: 0.35; cursor: not-allowed; }
+  .auth-bar{ margin-top: 10px; display:flex; align-items:center; gap:10px; }
+  .login-btn{
+    font-family: var(--font-mono); font-size: 12px; color: var(--cyan);
+    background: var(--panel); border: 1px solid var(--cyan-dim); border-radius: 999px;
+    padding: 7px 16px; cursor:pointer;
+  }
+  .login-btn:hover{ background: var(--panel-2); }
+  .user-badge{
+    display:flex; align-items:center; gap:8px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+    padding: 4px 6px 4px 4px; font-size: 12.5px; color: var(--ink-dim);
+  }
+  .user-badge img{ width:22px; height:22px; border-radius:50%; display:block; }
+  .user-badge .avatar-fallback{
+    width:22px; height:22px; border-radius:50%; background:var(--cyan-dim); color:var(--cyan);
+    display:flex; align-items:center; justify-content:center; font-family:var(--font-mono); font-size:10px; font-weight:600;
+  }
+  .logout-btn{
+    background:none; border:none; color: var(--ink-faint); cursor:pointer;
+    font-family: var(--font-mono); font-size: 11px; padding:0 4px;
+  }
+  .logout-btn:hover{ color: var(--red); }
+  .view-only-note{ font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); }
+  body.read-only .add-btn, body.read-only .chip, body.read-only .type-select,
+  body.read-only .edit, body.read-only .del, body.read-only .drag-handle,
+  body.read-only .copy-btn, body.read-only .add-resident-btn, body.read-only .remove,
+  body.read-only .cat-select, body.read-only .month-add-btn, body.read-only .rename-input{
+    opacity: 0.55;
+  }
+  body.read-only .agenda{ cursor: default; }
 
   .roster{
     margin-top: 1.6rem;
@@ -532,6 +562,7 @@
     <h1>Escala de plantões</h1>
     <p class="sub">Divida as agendas de USG por turno, atribua os residentes e acompanhe o contador para manter o rodízio igualitário a cada mês.</p>
     <div class="conn" id="conn"><span class="led"></span><span id="conn-text">Conectando ao banco de dados…</span><button id="undo-btn" disabled>↺ Desfazer</button></div>
+    <div class="auth-bar" id="auth-bar"></div>
     <div class="roster" id="roster"></div>
   </div>
 </div>
@@ -584,6 +615,7 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -737,6 +769,7 @@ function pushUndoSnapshot(){
 
 function undoLastAction(){
   if(undoStack.length === 0) return;
+  if(!requireAuth()) return;
   if(!confirm('Desfazer a última ação? Isso reverte para o estado anterior e pode sobrescrever mudanças feitas por outro residente nesse meio-tempo.')) return;
   const prev = undoStack.pop();
   state = JSON.parse(prev);
@@ -746,6 +779,80 @@ function undoLastAction(){
 function updateUndoButton(){
   const btn = document.getElementById('undo-btn');
   if(btn) btn.disabled = undoStack.length === 0;
+}
+
+let currentUser = null;
+
+function requireAuth(){
+  if(!currentUser){
+    alert('Faça login com sua conta Google para editar a escala. A visualização continua livre para todos.');
+    return false;
+  }
+  return true;
+}
+
+function renderAuthBar(){
+  const el = document.getElementById('auth-bar');
+  if(!el) return;
+  el.innerHTML = '';
+  if(currentUser){
+    const badge = document.createElement('div');
+    badge.className = 'user-badge';
+    if(currentUser.photoURL){
+      const img = document.createElement('img');
+      img.src = currentUser.photoURL;
+      img.alt = currentUser.displayName || currentUser.email || 'Usuário';
+      badge.appendChild(img);
+    } else {
+      const fallback = document.createElement('span');
+      fallback.className = 'avatar-fallback';
+      fallback.textContent = initials(currentUser.displayName || currentUser.email || '?');
+      badge.appendChild(fallback);
+    }
+    const name = document.createElement('span');
+    name.textContent = currentUser.displayName || currentUser.email || 'Logado';
+    badge.appendChild(name);
+    const logout = document.createElement('button');
+    logout.className = 'logout-btn';
+    logout.textContent = 'sair';
+    logout.onclick = () => firebase.auth().signOut();
+    badge.appendChild(logout);
+    el.appendChild(badge);
+  } else {
+    const btn = document.createElement('button');
+    btn.className = 'login-btn';
+    btn.textContent = 'Entrar com Google para editar';
+    btn.onclick = signInWithGoogle;
+    el.appendChild(btn);
+    const note = document.createElement('span');
+    note.className = 'view-only-note';
+    note.textContent = 'Visualização liberada para todos, sem login.';
+    el.appendChild(note);
+  }
+  document.body.classList.toggle('read-only', !currentUser);
+}
+
+function signInWithGoogle(){
+  const provider = new firebase.auth.GoogleAuthProvider();
+  firebase.auth().signInWithPopup(provider).catch((err) => {
+    if(err && (err.code === 'auth/popup-blocked' || err.code === 'auth/cancelled-popup-request')){
+      firebase.auth().signInWithRedirect(provider);
+    } else {
+      console.error(err);
+      alert('Não foi possível entrar com o Google. Tente novamente.');
+    }
+  });
+}
+
+function initAuth(){
+  try{
+    firebase.auth().onAuthStateChanged((user) => {
+      currentUser = user;
+      renderAuthBar();
+    });
+  }catch(e){
+    console.error('Falha ao iniciar autenticação', e);
+  }
 }
 
 function setConn(status, text){
@@ -805,6 +912,7 @@ function getFolgas(dayKey, turno){
 }
 
 function toggleFolga(dayKey, turno, residentId){
+  if(!requireAuth()) return;
   pushUndoSnapshot();
   const list = getFolgas(dayKey, turno);
   const idx = list.indexOf(residentId);
@@ -861,6 +969,7 @@ function categoryTotals(counts){
 function addResident(name, category){
   const trimmed = name.trim();
   if(!trimmed) return;
+  if(!requireAuth()) return;
   pushUndoSnapshot();
   const id = slugify(trimmed) + '-' + Math.random().toString(36).slice(2,5);
   state.residents.push({ id, name: trimmed, category: category || null });
@@ -870,6 +979,7 @@ function addResident(name, category){
 function setResidentCategory(id, category){
   const r = getResident(id);
   if(!r) return;
+  if(!requireAuth()){ renderAll(); return; }
   pushUndoSnapshot();
   r.category = category || null;
   saveState(); renderAll();
@@ -878,6 +988,7 @@ function setResidentCategory(id, category){
 function removeResident(id){
   const r = state.residents.find(x => x.id === id);
   if(!r) return;
+  if(!requireAuth()) return;
   if(!confirm('Remover ' + r.name + '? Os turnos já atribuídos a essa pessoa ficarão livres.')) return;
   pushUndoSnapshot();
   Object.values(state.agendas).forEach(list => {
@@ -898,6 +1009,8 @@ function removeResident(id){
 
 function createMonth(monthKey){
   if(!monthKey) return;
+  if(!requireAuth()) return;
+  pushUndoSnapshot();
   if(!state.monthsCreated.some(m => m.key === monthKey)){
     state.monthsCreated.push({ key: monthKey, label: formatMonthLabel(monthKey) });
     state.monthsCreated.sort((a,b) => a.key.localeCompare(b.key));
@@ -914,6 +1027,7 @@ function isWeekLocked(week){
 }
 
 function toggleWeekLock(weekIndex){
+  if(!requireAuth()) return;
   const weeks = getWeeksForMonthKey(state.activeMonth);
   const week = weeks[weekIndex];
   const key = weekLockKey(week);
@@ -981,6 +1095,7 @@ function exportWeekPDF(weekIndex){
 }
 
 function saveWeekAsTemplate(weekIndex){
+  if(!requireAuth()) return;
   const weeks = getWeeksForMonthKey(state.activeMonth);
   const week = weeks[weekIndex];
   const name = prompt('Nome do modelo (ex.: "Semana padrão"):', '');
@@ -1004,6 +1119,7 @@ function saveWeekAsTemplate(weekIndex){
 function applyTemplateToWeek(weekIndex, templateId){
   const tpl = state.templates.find(t => t.id === templateId);
   if(!tpl) return;
+  if(!requireAuth()) return;
   const weeks = getWeeksForMonthKey(state.activeMonth);
   const week = weeks[weekIndex];
   if(isWeekLocked(week)){
@@ -1026,6 +1142,7 @@ function applyTemplateToWeek(weekIndex, templateId){
 function deleteTemplate(id){
   const tpl = state.templates.find(t => t.id === id);
   if(!tpl) return;
+  if(!requireAuth()) return;
   if(!confirm('Excluir o modelo "' + tpl.name + '"?')) return;
   pushUndoSnapshot();
   state.templates = state.templates.filter(t => t.id !== id);
@@ -1033,6 +1150,7 @@ function deleteTemplate(id){
 }
 
 function copyWeek(weekIndex, direction){
+  if(!requireAuth()) return;
   const weeks = getWeeksForMonthKey(state.activeMonth);
   const source = weeks[weekIndex];
   let target;
@@ -1344,6 +1462,7 @@ function buildCell(dayKey, turno){
     box.addEventListener('dragstart', (e) => {
       const tag = e.target.tagName;
       if(tag === 'SELECT' || tag === 'INPUT' || tag === 'BUTTON'){ e.preventDefault(); return; }
+      if(!currentUser){ e.preventDefault(); return; }
       dragSource = { dayKey, turno, id: ag.id };
       box.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
@@ -1362,6 +1481,7 @@ function buildCell(dayKey, turno){
     box.addEventListener('drop', (e) => {
       e.preventDefault();
       box.classList.remove('drag-over');
+      if(!currentUser) return;
       if(!dragSource || dragSource.dayKey !== dayKey || dragSource.turno !== turno) return;
       const arr = getAgendas(dayKey, turno);
       const fromIdx = arr.findIndex(a => a.id === dragSource.id);
@@ -1393,6 +1513,7 @@ function buildCell(dayKey, turno){
     editBtn.textContent = '✎';
     editBtn.title = 'Renomear';
     editBtn.onclick = () => {
+      if(!requireAuth()) return;
       const input = document.createElement('input');
       input.className = 'rename-input';
       input.value = ag.title;
@@ -1420,6 +1541,7 @@ function buildCell(dayKey, turno){
     del.textContent = '×';
     del.title = 'Excluir';
     del.onclick = () => {
+      if(!requireAuth()) return;
       const arr = getAgendas(dayKey, turno);
       const idx = arr.findIndex(a => a.id === ag.id);
       if(idx > -1){
@@ -1438,6 +1560,7 @@ function buildCell(dayKey, turno){
     typeSelect.className = 'type-select' + (ag.type ? ' ' + ag.type : '');
     typeSelect.innerHTML = typeOptionsHtml(ag.type);
     typeSelect.onchange = (e) => {
+      if(!requireAuth()){ renderAll(); return; }
       pushUndoSnapshot();
       ag.type = e.target.value || null;
       saveState(); renderAll();
@@ -1454,6 +1577,7 @@ function buildCell(dayKey, turno){
       chip.textContent = initials(r.name);
       chip.title = r.name + (active ? ' (atribuído — clique para remover)' : ' (clique para atribuir)');
       chip.onclick = () => {
+        if(!requireAuth()) return;
         pushUndoSnapshot();
         const cur = ag.residentIds || (ag.residentIds = []);
         const idx = cur.indexOf(r.id);
@@ -1564,6 +1688,7 @@ function buildAddForm(dayKey, turno, originalBtn){
   ok.onclick = () => {
     const title = input.value.trim();
     if(!title) return;
+    if(!requireAuth()) return;
     pushUndoSnapshot();
     getAgendas(dayKey, turno).push({ id: uid(), title, residentIds: [], type: typeSelect.value || null });
     saveState(); renderAll();
@@ -1755,6 +1880,7 @@ document.getElementById('monthly-report-btn').addEventListener('click', () => {
 });
 
 initFirebase();
+initAuth();
 </script>
 
 </body>

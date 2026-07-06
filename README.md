@@ -11,6 +11,7 @@ Hospedagem gratuita no Vercel.
 - Copiar os títulos das agendas de uma semana para a semana seguinte (residentes não são copiados — o turno entra livre).
 - Criar a escala de um novo mês a qualquer momento (botão "+ novo mês"); as semanas são geradas automaticamente.
 - Adicionar ou remover residentes da equipe (botão "+ residente" e "×" em cada nome).
+- **Login com Google exigido apenas para editar** — a visualização de toda a escala e dos relatórios é livre para qualquer pessoa, sem login.
 
 ## 1. Criar o projeto no Firebase (gratuito)
 
@@ -24,34 +25,45 @@ Hospedagem gratuita no Vercel.
    - Dê um apelido (ex.: `escala-web`) e clique em **Registrar app**. Não precisa configurar hosting do Firebase.
 6. Copie o objeto `firebaseConfig` que aparece na tela e cole no arquivo `firebase-config.js` deste projeto, substituindo os valores `"COLE_AQUI"`.
 
-## 2. Ajustar as regras de segurança do Firestore
+## 2. Ativar o login com Google
 
-Por padrão, o "modo de teste" expira em 30 dias. Para o site funcionar o mês inteiro (e depois, se quiserem reutilizar), vá em **Firestore Database > Regras** e substitua pelo conteúdo abaixo, depois clique em **Publicar**:
+A visualização do site é livre para todos, sem login. Mas para editar (adicionar agenda, atribuir residente, etc.) é preciso entrar com uma conta Google.
+
+1. No menu lateral do Firebase, clique em **Compilação > Authentication** > **Vamos começar** (ou **Get started**).
+2. Na aba **Sign-in method** (Método de login), clique em **Google** na lista de provedores.
+3. Ative o toggle **Enable/Ativar**, escolha um e-mail de suporte do projeto e clique em **Salvar**.
+4. Ainda em Authentication, vá em **Settings > Authorized domains** (Domínios autorizados) e clique em **Add domain**. Adicione o domínio que o Vercel vai te dar (ex.: `escala-usg.vercel.app`) — sem isso, o login com Google não funciona fora do `localhost`. Você faz esse passo depois do passo 3 (publicar no Vercel), quando já souber a URL final.
+
+## 3. Ajustar as regras de segurança do Firestore
+
+Por padrão, o "modo de teste" expira em 30 dias. Vá em **Firestore Database > Regras** e substitua pelo conteúdo abaixo, depois clique em **Publicar**:
 
 ```
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /escala/julho2026 {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if request.auth != null;
     }
   }
 }
 ```
 
-Isso libera leitura e escrita apenas para o documento específico da escala (não para o banco inteiro). Como é uma ferramenta interna sem dados sensíveis, essa regra simples é suficiente — mas qualquer pessoa com o link do site poderá editar a escala, então compartilhem o link só com o grupo.
+Isso libera a **leitura para qualquer pessoa** (sem login) e exige **login com Google para escrever** (editar a escala). Qualquer pessoa com uma conta Google pode editar — não há lista de e-mails permitidos; se quiserem restringir a apenas os 5 e-mails de vocês, me avisem que eu ajusto a regra.
 
-## 3. Publicar no Vercel (gratuito)
+## 4. Publicar no Vercel (gratuito)
 
 **Opção mais simples — pelo site, sem instalar nada:**
 
 1. Crie uma conta gratuita em https://vercel.com (pode entrar com GitHub, GitLab ou e-mail).
 2. Suba esta pasta (`escala-usg-vercel`) para um repositório no GitHub:
    - Crie um repositório novo em https://github.com/new
-   - Envie os 3 arquivos (`index.html`, `firebase-config.js`, `README.md`) para esse repositório (pelo site do GitHub mesmo, em **Add file > Upload files**, é o caminho mais rápido).
+   - Envie os arquivos (`index.html`, `firebase-config.js`, `README.md`) para esse repositório (pelo site do GitHub mesmo, em **Add file > Upload files**, é o caminho mais rápido).
 3. No Vercel, clique em **Add New > Project**, selecione o repositório que você acabou de criar e clique em **Deploy**.
    - Não precisa mudar nenhuma configuração — o Vercel detecta que é um site estático automaticamente.
 4. Em ~30 segundos o Vercel te dá uma URL pública (tipo `escala-usg.vercel.app`). Esse é o link para compartilhar com o Pedro, Narelly, Thiago, Júlio e Luís.
+5. Volte no Firebase (passo 2.4) e adicione essa URL como domínio autorizado do Authentication — sem isso o botão de login com Google não funciona no site publicado.
 
 **Alternativa via terminal (se algum de vocês tiver Node.js instalado):**
 
@@ -63,12 +75,14 @@ vercel --prod
 
 Siga as instruções na tela (login e confirmação do diretório) e o próprio comando já devolve a URL pública.
 
-## 4. Testar
+## 5. Testar
 
-Abra a URL publicada em duas abas diferentes (ou peça para outro residente abrir) e adicione uma agenda em uma aba — ela deve aparecer automaticamente na outra em poucos segundos, confirmando que o Firestore está sincronizando.
+Abra a URL publicada em duas abas diferentes (ou peça para outro residente abrir) e adicione uma agenda em uma aba — ela deve aparecer automaticamente na outra em poucos segundos, confirmando que o Firestore está sincronizando. Teste também o botão "Entrar com Google" — sem estar logado, qualquer tentativa de editar deve mostrar um aviso pedindo login; visualizar a escala e os relatórios continua funcionando normalmente sem login.
 
 ## Se algo der errado
 
 - **"Firebase não configurado"** aparece no site: os valores em `firebase-config.js` ainda estão como `"COLE_AQUI"`.
-- **"Erro ao conectar ao Firebase"**: confira se o Firestore foi criado (passo 1.3) e se as regras foram publicadas (passo 2).
+- **"Erro ao conectar ao Firebase"**: confira se o Firestore foi criado (passo 1.3) e se as regras foram publicadas (passo 3).
+- **Botão de login com Google não abre nada / dá erro de domínio**: falta adicionar a URL do Vercel em Authentication > Settings > Authorized domains (passo 2.4 / 4.5).
+- **Login funciona mas a edição continua bloqueada**: confira se as regras do Firestore (passo 3) foram publicadas com `allow write: if request.auth != null;`.
 - Qualquer mudança feita depois no `firebase-config.js` ou `index.html` exige um novo commit no GitHub — o Vercel republica sozinho a cada push.
