@@ -12,6 +12,16 @@ Hospedagem gratuita no Vercel.
 - Criar a escala de um novo mês a qualquer momento (botão "+ novo mês"); as semanas são geradas automaticamente.
 - Adicionar ou remover residentes da equipe (botão "+ residente" e "×" em cada nome).
 - **Login com Google exigido apenas para editar** — a visualização de toda a escala e dos relatórios é livre para qualquer pessoa, sem login.
+- **Instalável como app (PWA)** — dá para adicionar à tela inicial do celular e abrir como um aplicativo, sem barra de navegador.
+
+## Instalar como app no celular
+
+Depois de publicado no Vercel, cada residente pode instalar o site como se fosse um app:
+
+- **Android (Chrome)**: abra o link, toque no menu (⋮) e escolha **"Instalar app"** ou **"Adicionar à tela inicial"**.
+- **iPhone (Safari)**: abra o link, toque no ícone de compartilhar (□ com seta para cima) e escolha **"Adicionar à Tela de Início"**.
+
+O ícone aparece na tela inicial e o site abre em tela cheia, sem a barra de endereço do navegador.
 
 ## 1. Criar o projeto no Firebase (gratuito)
 
