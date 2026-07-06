@@ -23,6 +23,7 @@
     --amber: #f2a65a;
     --amber-dim: #6e4a26;
     --red: #e8836b;
+    --red-dim: #5f3128;
     --r1: #7fd858;
     --r1-dim: #2f5f28;
     --r1-bg: #16281a;
@@ -297,6 +298,15 @@
   .chip.active.r1{ background: var(--r1-dim); color: var(--r1); border-color: var(--r1-dim); }
   .chip.active.r2{ background: var(--r2-dim); color: var(--r2); border-color: var(--r2-dim); }
   .chip.active.r3{ background: var(--r3-dim); color: var(--r3); border-color: var(--r3-dim); }
+  .folga-row{
+    margin-top: 3px; padding-top: 7px; border-top: 1px dashed var(--line);
+    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+  }
+  .folga-label{
+    font-family: var(--font-mono); font-size: 9.5px; color: var(--ink-faint);
+    text-transform:uppercase; letter-spacing:0.05em; flex-shrink:0;
+  }
+  .chip.folga-active{ background: var(--red-dim); color: var(--red); border-color: var(--red-dim); }
   .agenda .title{ font-size:12.5px; color:var(--ink); display:flex; justify-content:space-between; gap:6px; align-items:flex-start;}
   .agenda .title span.txt{ line-height:1.35; cursor:text; }
   .agenda .title .actions{ display:flex; gap:2px; flex-shrink:0; }
@@ -413,6 +423,10 @@
   .bar-fill{ height:100%; background: var(--cyan); border-radius:4px; transition: width .4s ease; }
   .bar-fill.amber{ background: var(--amber); }
   .bar-val{ width: 26px; text-align:right; font-family: var(--font-mono); font-size:13px; color: var(--ink); flex-shrink:0; }
+  .bar-folga{
+    width: 64px; text-align:right; font-family: var(--font-mono); font-size: 11px;
+    color: var(--red); flex-shrink:0;
+  }
   .bar-fill.r1{ background: var(--r1); }
   .bar-fill.r2{ background: var(--r2); }
   .bar-fill.r3{ background: var(--r3); }
@@ -609,11 +623,18 @@ function migrateState(raw){
     : [{ key:'2026-07', label:'Julho 2026' }];
   const residents = (old.residents && old.residents.length ? old.residents : DEFAULT_RESIDENTS)
     .map(r => ({ id: r.id, name: r.name, category: r.category || null }));
+  const folgas = {};
+  Object.keys(old.folgas || {}).forEach(k => {
+    const m = k.match(/^(d\d_\d)_(manha|tarde)$/);
+    const targetKey = (m && OLD_KEY_MAP[m[1]]) ? OLD_KEY_MAP[m[1]] + '_' + m[2] : k;
+    folgas[targetKey] = old.folgas[k] || [];
+  });
   return {
     residents,
     monthsCreated,
     activeMonth: old.activeMonth && monthsCreated.some(m => m.key === old.activeMonth) ? old.activeMonth : monthsCreated[0].key,
     agendas,
+    folgas,
   };
 }
 
@@ -669,6 +690,35 @@ function getAgendas(dayKey, turno){
   const k = cellKey(dayKey, turno);
   if(!state.agendas[k]) state.agendas[k] = [];
   return state.agendas[k];
+}
+
+function getFolgas(dayKey, turno){
+  if(!state.folgas) state.folgas = {};
+  const k = cellKey(dayKey, turno);
+  if(!state.folgas[k]) state.folgas[k] = [];
+  return state.folgas[k];
+}
+
+function toggleFolga(dayKey, turno, residentId){
+  const list = getFolgas(dayKey, turno);
+  const idx = list.indexOf(residentId);
+  if(idx > -1) list.splice(idx, 1); else list.push(residentId);
+  saveState(); renderAll();
+}
+
+function folgaCountsForWeeks(weeks){
+  const counts = {};
+  state.residents.forEach(r => counts[r.id] = 0);
+  weeks.forEach(week => {
+    week.days.forEach(day => {
+      TURNOS.forEach(t => {
+        getFolgas(day.key, t.key).forEach(rid => {
+          if(counts[rid] !== undefined) counts[rid] += 1;
+        });
+      });
+    });
+  });
+  return counts;
 }
 
 function countsForWeeks(weeks){
@@ -729,6 +779,10 @@ function removeResident(id){
       }
     });
   });
+  Object.keys(state.folgas || {}).forEach(k => {
+    const idx = state.folgas[k].indexOf(id);
+    if(idx > -1) state.folgas[k].splice(idx, 1);
+  });
   state.residents = state.residents.filter(x => x.id !== id);
   saveState(); renderAll();
 }
@@ -786,6 +840,7 @@ function copyWeek(weekIndex, direction){
       const srcList = getAgendas(day.key, t.key);
       const newList = srcList.map(ag => ({ id: uid(), title: ag.title, residentIds: [], type: ag.type || null }));
       state.agendas[cellKey(targetDay.key, t.key)] = newList;
+      state.folgas[cellKey(targetDay.key, t.key)] = [];
     });
   });
   saveState(); renderAll();
@@ -1122,6 +1177,24 @@ function buildCell(dayKey, turno){
   };
   frag.appendChild(addBtn);
 
+  const folgaList = getFolgas(dayKey, turno);
+  const folgaRow = document.createElement('div');
+  folgaRow.className = 'folga-row';
+  const folgaLabel = document.createElement('span');
+  folgaLabel.className = 'folga-label';
+  folgaLabel.textContent = 'Folga';
+  folgaRow.appendChild(folgaLabel);
+  state.residents.forEach(r => {
+    const active = folgaList.includes(r.id);
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip' + (active ? ' folga-active' : '');
+    chip.textContent = initials(r.name);
+    chip.title = r.name + (active ? ' (de folga — clique para remover)' : ' (clique para marcar folga)');
+    chip.onclick = () => toggleFolga(dayKey, turno, r.id);
+    folgaRow.appendChild(chip);
+  });
+  frag.appendChild(folgaRow);
 
   return frag;
 }
@@ -1169,6 +1242,8 @@ function renderReport(){
   const allWeeks = getWeeksForMonthKey(state.activeMonth);
   const week = allWeeks[activeWeekIndex] || allWeeks[0];
   const { counts, assigned, total } = countsForWeeks([week]);
+  const folgaCounts = folgaCountsForWeeks([week]);
+  const totalFolgas = Object.values(folgaCounts).reduce((a,b) => a+b, 0);
   const statsEl = document.getElementById('report-stats');
   const vals = Object.values(counts);
   const max = vals.length ? Math.max(...vals, 1) : 1;
@@ -1181,6 +1256,7 @@ function renderReport(){
     <div class="stat"><div class="label">Atribuídas</div><div class="val">${assigned}</div></div>
     <div class="stat"><div class="label">Livres</div><div class="val ${total-assigned>0?'amber':''}">${total - assigned}</div></div>
     <div class="stat"><div class="label">Diferença máx.</div><div class="val ${spread>1?'amber':''}">${spread}</div></div>
+    <div class="stat"><div class="label">Folgas na semana</div><div class="val ${totalFolgas>0?'amber':''}">${totalFolgas}</div></div>
   `;
 
   function renderGroup(containerId, categoryKey){
@@ -1194,6 +1270,7 @@ function renderReport(){
     const groupMax = Math.max(...members.map(r => counts[r.id] || 0), 1);
     members.forEach(r => {
       const c = counts[r.id] || 0;
+      const f = folgaCounts[r.id] || 0;
       const pct = Math.round((c / groupMax) * 100);
       const row = document.createElement('div');
       row.className = 'bar-row';
@@ -1201,6 +1278,7 @@ function renderReport(){
         <div class="bar-name">${r.name}</div>
         <div class="bar-track"><div class="bar-fill${categoryKey ? ' ' + categoryKey : ''}" style="width:${pct}%"></div></div>
         <div class="bar-val">${c}</div>
+        <div class="bar-folga">${f > 0 ? f + ' folga' + (f > 1 ? 's' : '') : ''}</div>
       `;
       el.appendChild(row);
     });
