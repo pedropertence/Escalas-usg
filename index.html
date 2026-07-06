@@ -103,6 +103,13 @@
   .conn .led{ width:7px; height:7px; border-radius:50%; background: var(--amber); flex-shrink:0; }
   .conn.ok .led{ background: var(--cyan); }
   .conn.err .led{ background: var(--red); }
+  #undo-btn{
+    font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+    padding: 4px 10px; margin-left: 8px; cursor:pointer;
+  }
+  #undo-btn:hover:not(:disabled){ color: var(--cyan); border-color: var(--cyan-dim); }
+  #undo-btn:disabled{ opacity: 0.35; cursor: not-allowed; }
 
   .roster{
     margin-top: 1.6rem;
@@ -230,13 +237,25 @@
 
   .week-panel{ display:none; padding-top: 1.4rem; }
   .week-panel.active{ display:block; }
-  .week-head{ display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-bottom: 0.8rem; }
+  .week-head{ display:flex; align-items:center; justify-content:flex-start; flex-wrap:wrap; gap:8px; margin-bottom: 0.8rem; }
   .copy-btn{
     font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-faint);
     background: transparent; border: 1px solid var(--line); border-radius: 7px;
     padding: 6px 12px; cursor:pointer;
   }
   .copy-btn:hover{ color: var(--cyan); border-color: var(--cyan-dim); }
+  .copy-btn.active-lock{ color: var(--amber); border-color: var(--amber-dim); }
+  .lock-badge{
+    font-family: var(--font-mono); font-size: 11px; color: var(--amber);
+    border: 1px solid var(--amber-dim); background: var(--amber-dim);
+    padding: 6px 12px; border-radius: 7px;
+  }
+  .week-panel.locked .grid-scroll{
+    pointer-events: none;
+    opacity: 0.65;
+  }
+  .template-picker{ min-width: 220px; }
+  .template-picker .row{ gap: 6px; }
 
   .grid-scroll{
     overflow-x: auto;
@@ -474,6 +493,9 @@
   ::-webkit-scrollbar{ height:6px; width:6px; }
   ::-webkit-scrollbar-thumb{ background: var(--line); border-radius: 3px; }
 
+  .export-clean .actions, .export-clean .drag-handle, .export-clean .add-btn{ display:none !important; }
+  .export-clean .agenda{ cursor: default; }
+
   @media (max-width: 640px){
     .hero{ padding: 1.6rem 1rem 1.6rem; }
     h1{ font-size: 1.35rem; }
@@ -509,7 +531,7 @@
     <div class="eyebrow">Serviço de ultrassonografia · residência</div>
     <h1>Escala de plantões</h1>
     <p class="sub">Divida as agendas de USG por turno, atribua os residentes e acompanhe o contador para manter o rodízio igualitário a cada mês.</p>
-    <div class="conn" id="conn"><span class="led"></span><span id="conn-text">Conectando ao banco de dados…</span></div>
+    <div class="conn" id="conn"><span class="led"></span><span id="conn-text">Conectando ao banco de dados…</span><button id="undo-btn" disabled>↺ Desfazer</button></div>
     <div class="roster" id="roster"></div>
   </div>
 </div>
@@ -536,14 +558,35 @@
     <div class="bars" id="report-sem"></div>
   </div>
 
+  <div class="report-toggle">
+    <button id="monthly-report-btn">Ver relatório mensal ↓</button>
+    <div class="line"></div>
+  </div>
+
+  <div class="report" id="monthly-report">
+    <div class="report-grid" id="monthly-report-stats"></div>
+    <div class="report-subhead cat-head r1">R1</div>
+    <div class="bars" id="monthly-report-r1"></div>
+    <div class="report-subhead cat-head r2">R2</div>
+    <div class="bars" id="monthly-report-r2"></div>
+    <div class="report-subhead cat-head r3">R3</div>
+    <div class="bars" id="monthly-report-r3"></div>
+    <div class="report-subhead" id="monthly-report-sem-head">Sem categoria</div>
+    <div class="bars" id="monthly-report-sem"></div>
+    <div class="report-subhead">Por semana</div>
+    <div class="bars" id="monthly-report-weeks"></div>
+  </div>
+
   <div class="foot-note">
-    Os dados são salvos no Firebase e sincronizados em tempo real — qualquer residente que abrir este site vê e edita a mesma escala, e as mudanças aparecem para todos automaticamente. O relatório mostra a semana selecionada acima.
+    Os dados são salvos no Firebase e sincronizados em tempo real — qualquer residente que abrir este site vê e edita a mesma escala, e as mudanças aparecem para todos automaticamente. O relatório da semana mostra a semana selecionada acima; o relatório mensal compila todas as semanas do mês.
   </div>
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 const DEFAULT_RESIDENTS = [
   { id:'pedro', name:'Pedro', category:null },
@@ -672,6 +715,8 @@ function migrateState(raw){
     activeMonth: old.activeMonth && monthsCreated.some(m => m.key === old.activeMonth) ? old.activeMonth : monthsCreated[0].key,
     agendas,
     folgas,
+    templates: old.templates || [],
+    lockedWeeks: old.lockedWeeks || {},
   };
 }
 
@@ -679,6 +724,29 @@ let state = migrateState(null);
 let activeWeekIndex = 0;
 let dragSource = null;
 let db, docRef;
+let undoStack = [];
+const UNDO_LIMIT = 15;
+
+function pushUndoSnapshot(){
+  try{
+    undoStack.push(JSON.stringify(state));
+    if(undoStack.length > UNDO_LIMIT) undoStack.shift();
+  }catch(e){ console.error('Falha ao salvar snapshot de undo', e); }
+  updateUndoButton();
+}
+
+function undoLastAction(){
+  if(undoStack.length === 0) return;
+  if(!confirm('Desfazer a última ação? Isso reverte para o estado anterior e pode sobrescrever mudanças feitas por outro residente nesse meio-tempo.')) return;
+  const prev = undoStack.pop();
+  state = JSON.parse(prev);
+  saveState(); renderAll();
+}
+
+function updateUndoButton(){
+  const btn = document.getElementById('undo-btn');
+  if(btn) btn.disabled = undoStack.length === 0;
+}
 
 function setConn(status, text){
   const el = document.getElementById('conn');
@@ -737,6 +805,7 @@ function getFolgas(dayKey, turno){
 }
 
 function toggleFolga(dayKey, turno, residentId){
+  pushUndoSnapshot();
   const list = getFolgas(dayKey, turno);
   const idx = list.indexOf(residentId);
   if(idx > -1) list.splice(idx, 1); else list.push(residentId);
@@ -792,6 +861,7 @@ function categoryTotals(counts){
 function addResident(name, category){
   const trimmed = name.trim();
   if(!trimmed) return;
+  pushUndoSnapshot();
   const id = slugify(trimmed) + '-' + Math.random().toString(36).slice(2,5);
   state.residents.push({ id, name: trimmed, category: category || null });
   saveState(); renderAll();
@@ -800,6 +870,7 @@ function addResident(name, category){
 function setResidentCategory(id, category){
   const r = getResident(id);
   if(!r) return;
+  pushUndoSnapshot();
   r.category = category || null;
   saveState(); renderAll();
 }
@@ -808,6 +879,7 @@ function removeResident(id){
   const r = state.residents.find(x => x.id === id);
   if(!r) return;
   if(!confirm('Remover ' + r.name + '? Os turnos já atribuídos a essa pessoa ficarão livres.')) return;
+  pushUndoSnapshot();
   Object.values(state.agendas).forEach(list => {
     list.forEach(ag => {
       if(ag.residentIds){
@@ -832,6 +904,131 @@ function createMonth(monthKey){
   }
   state.activeMonth = monthKey;
   activeWeekIndex = 0;
+  saveState(); renderAll();
+}
+
+function weekLockKey(week){ return week.days[0].key; }
+
+function isWeekLocked(week){
+  return !!(state.lockedWeeks && state.lockedWeeks[weekLockKey(week)]);
+}
+
+function toggleWeekLock(weekIndex){
+  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const week = weeks[weekIndex];
+  const key = weekLockKey(week);
+  if(!state.lockedWeeks) state.lockedWeeks = {};
+  const locked = !!state.lockedWeeks[key];
+  if(locked){
+    if(!confirm('Desbloquear a semana de ' + week.range + ' para edição?')) return;
+    pushUndoSnapshot();
+    delete state.lockedWeeks[key];
+  } else {
+    if(!confirm('Finalizar a semana de ' + week.range + '? Ela ficará travada para edição até ser desbloqueada.')) return;
+    pushUndoSnapshot();
+    state.lockedWeeks[key] = true;
+  }
+  saveState(); renderAll();
+}
+
+async function captureWeekCanvas(weekIndex){
+  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const week = weeks[weekIndex];
+  const panels = document.querySelectorAll('.week-panel');
+  const sourceGrid = panels[weekIndex].querySelector('.grid-scroll');
+  const clone = sourceGrid.cloneNode(true);
+  clone.classList.add('export-clean');
+  clone.style.overflow = 'visible';
+  clone.style.width = 'max-content';
+
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'position:fixed; left:-99999px; top:0; background:#08181c; padding:22px; display:inline-block;';
+  const title = document.createElement('div');
+  title.style.cssText = 'font-family:"IBM Plex Mono",monospace; font-size:16px; color:#e7f4f1; margin-bottom:14px;';
+  title.textContent = 'Escala USG — ' + formatMonthLabel(state.activeMonth) + ' · ' + week.label + ' (' + week.range + ')';
+  wrapper.appendChild(title);
+  wrapper.appendChild(clone);
+  document.body.appendChild(wrapper);
+
+  let canvas;
+  try{
+    canvas = await html2canvas(wrapper, { backgroundColor: '#08181c', scale: 2 });
+  } finally {
+    document.body.removeChild(wrapper);
+  }
+  return { canvas, week };
+}
+
+function exportWeekImage(weekIndex){
+  captureWeekCanvas(weekIndex).then(({ canvas, week }) => {
+    const link = document.createElement('a');
+    link.download = 'escala-semana-' + week.range.replace(/[^0-9a-z]+/gi, '-') + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }).catch(e => { console.error(e); alert('Não foi possível gerar a imagem.'); });
+}
+
+function exportWeekPDF(weekIndex){
+  captureWeekCanvas(weekIndex).then(({ canvas, week }) => {
+    const { jsPDF } = window.jspdf;
+    const imgData = canvas.toDataURL('image/png');
+    const w = canvas.width / 2, h = canvas.height / 2;
+    const orientation = w > h ? 'l' : 'p';
+    const pdf = new jsPDF({ orientation, unit: 'pt', format: [w, h] });
+    pdf.addImage(imgData, 'PNG', 0, 0, w, h);
+    pdf.save('escala-semana-' + week.range.replace(/[^0-9a-z]+/gi, '-') + '.pdf');
+  }).catch(e => { console.error(e); alert('Não foi possível gerar o PDF.'); });
+}
+
+function saveWeekAsTemplate(weekIndex){
+  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const week = weeks[weekIndex];
+  const name = prompt('Nome do modelo (ex.: "Semana padrão"):', '');
+  if(!name || !name.trim()) return;
+  const trimmedName = name.trim();
+  const cells = {};
+  week.days.forEach((day, di) => {
+    TURNOS.forEach(t => {
+      const list = getAgendas(day.key, t.key);
+      cells['d' + di + '_' + t.key] = list.map(ag => ({ title: ag.title, type: ag.type || null }));
+    });
+  });
+  pushUndoSnapshot();
+  const existingIdx = state.templates.findIndex(tp => tp.name === trimmedName);
+  const tpl = { id: existingIdx > -1 ? state.templates[existingIdx].id : uid(), name: trimmedName, cells };
+  if(existingIdx > -1) state.templates[existingIdx] = tpl; else state.templates.push(tpl);
+  saveState(); renderAll();
+  alert('Modelo "' + tpl.name + '" salvo.');
+}
+
+function applyTemplateToWeek(weekIndex, templateId){
+  const tpl = state.templates.find(t => t.id === templateId);
+  if(!tpl) return;
+  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const week = weeks[weekIndex];
+  if(isWeekLocked(week)){
+    alert('Esta semana está finalizada. Desbloqueie-a antes de colar um modelo.');
+    return;
+  }
+  if(!confirm('Aplicar o modelo "' + tpl.name + '" nesta semana? Isso substitui toda a semana atual (agendas e folgas). Os residentes entram livres.')) return;
+  pushUndoSnapshot();
+  week.days.forEach((day, di) => {
+    TURNOS.forEach(t => {
+      const key = 'd' + di + '_' + t.key;
+      const items = tpl.cells[key] || [];
+      state.agendas[cellKey(day.key, t.key)] = items.map(it => ({ id: uid(), title: it.title, type: it.type || null, residentIds: [] }));
+      state.folgas[cellKey(day.key, t.key)] = [];
+    });
+  });
+  saveState(); renderAll();
+}
+
+function deleteTemplate(id){
+  const tpl = state.templates.find(t => t.id === id);
+  if(!tpl) return;
+  if(!confirm('Excluir o modelo "' + tpl.name + '"?')) return;
+  pushUndoSnapshot();
+  state.templates = state.templates.filter(t => t.id !== id);
   saveState(); renderAll();
 }
 
@@ -869,8 +1066,14 @@ function copyWeek(weekIndex, direction){
     }
   }
 
+  if(isWeekLocked(target)){
+    alert('A semana de ' + target.range + ' está finalizada. Desbloqueie-a antes de sobrescrever.');
+    return;
+  }
+
   if(!confirm('Substituir toda a semana de ' + target.range + ' pelas agendas desta semana? As agendas que já existem nessa semana de destino serão apagadas. Os residentes atribuídos não são copiados — os turnos entram livres.')) return;
 
+  pushUndoSnapshot();
   source.days.forEach((day, i) => {
     const targetDay = target.days[i];
     TURNOS.forEach(t => {
@@ -1030,21 +1233,66 @@ function renderWeeks(){
   const el = document.getElementById('weeks');
   el.innerHTML = '';
   weeks.forEach((week, wi) => {
+    const locked = isWeekLocked(week);
     const panel = document.createElement('div');
-    panel.className = 'week-panel' + (wi === activeWeekIndex ? ' active' : '');
+    panel.className = 'week-panel' + (wi === activeWeekIndex ? ' active' : '') + (locked ? ' locked' : '');
 
     const head = document.createElement('div');
     head.className = 'week-head';
+
+    if(locked){
+      const badge = document.createElement('span');
+      badge.className = 'lock-badge';
+      badge.textContent = '🔒 Semana finalizada';
+      head.appendChild(badge);
+    }
+
     const copyPrevBtn = document.createElement('button');
     copyPrevBtn.className = 'copy-btn';
-    copyPrevBtn.textContent = '← Copiar para a semana anterior';
+    copyPrevBtn.textContent = '← Semana anterior';
+    copyPrevBtn.title = 'Copiar para a semana anterior';
     copyPrevBtn.onclick = () => copyWeek(wi, -1);
+
     const copyNextBtn = document.createElement('button');
     copyNextBtn.className = 'copy-btn';
-    copyNextBtn.textContent = 'Copiar para a próxima semana →';
+    copyNextBtn.textContent = 'Próxima semana →';
+    copyNextBtn.title = 'Copiar para a próxima semana';
     copyNextBtn.onclick = () => copyWeek(wi, 1);
+
+    const saveTplBtn = document.createElement('button');
+    saveTplBtn.className = 'copy-btn';
+    saveTplBtn.textContent = '💾 Salvar como modelo';
+    saveTplBtn.onclick = () => saveWeekAsTemplate(wi);
+
+    const pasteTplBtn = document.createElement('button');
+    pasteTplBtn.className = 'copy-btn';
+    pasteTplBtn.textContent = '📋 Colar modelo';
+    pasteTplBtn.onclick = () => {
+      pasteTplBtn.replaceWith(buildTemplatePicker(wi, pasteTplBtn));
+    };
+
+    const exportImgBtn = document.createElement('button');
+    exportImgBtn.className = 'copy-btn';
+    exportImgBtn.textContent = '⬇ Imagem';
+    exportImgBtn.onclick = () => exportWeekImage(wi);
+
+    const exportPdfBtn = document.createElement('button');
+    exportPdfBtn.className = 'copy-btn';
+    exportPdfBtn.textContent = '⬇ PDF';
+    exportPdfBtn.onclick = () => exportWeekPDF(wi);
+
+    const lockBtn = document.createElement('button');
+    lockBtn.className = 'copy-btn' + (locked ? ' active-lock' : '');
+    lockBtn.textContent = locked ? '🔓 Desbloquear semana' : '🔒 Finalizar semana';
+    lockBtn.onclick = () => toggleWeekLock(wi);
+
     head.appendChild(copyPrevBtn);
     head.appendChild(copyNextBtn);
+    head.appendChild(saveTplBtn);
+    head.appendChild(pasteTplBtn);
+    head.appendChild(exportImgBtn);
+    head.appendChild(exportPdfBtn);
+    head.appendChild(lockBtn);
     panel.appendChild(head);
 
     const gridScroll = document.createElement('div');
@@ -1119,6 +1367,7 @@ function buildCell(dayKey, turno){
       const fromIdx = arr.findIndex(a => a.id === dragSource.id);
       const toIdx = arr.findIndex(a => a.id === ag.id);
       if(fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+      pushUndoSnapshot();
       const [moved] = arr.splice(fromIdx, 1);
       arr.splice(toIdx, 0, moved);
       saveState(); renderAll();
@@ -1153,7 +1402,10 @@ function buildCell(dayKey, turno){
       input.select();
       const commit = () => {
         const v = input.value.trim();
-        if(v) ag.title = v;
+        if(v && v !== ag.title){
+          pushUndoSnapshot();
+          ag.title = v;
+        }
         saveState(); renderAll();
       };
       input.addEventListener('keydown', (e) => {
@@ -1170,7 +1422,10 @@ function buildCell(dayKey, turno){
     del.onclick = () => {
       const arr = getAgendas(dayKey, turno);
       const idx = arr.findIndex(a => a.id === ag.id);
-      if(idx > -1) arr.splice(idx, 1);
+      if(idx > -1){
+        pushUndoSnapshot();
+        arr.splice(idx, 1);
+      }
       saveState(); renderAll();
     };
 
@@ -1183,6 +1438,7 @@ function buildCell(dayKey, turno){
     typeSelect.className = 'type-select' + (ag.type ? ' ' + ag.type : '');
     typeSelect.innerHTML = typeOptionsHtml(ag.type);
     typeSelect.onchange = (e) => {
+      pushUndoSnapshot();
       ag.type = e.target.value || null;
       saveState(); renderAll();
     };
@@ -1198,6 +1454,7 @@ function buildCell(dayKey, turno){
       chip.textContent = initials(r.name);
       chip.title = r.name + (active ? ' (atribuído — clique para remover)' : ' (clique para atribuir)');
       chip.onclick = () => {
+        pushUndoSnapshot();
         const cur = ag.residentIds || (ag.residentIds = []);
         const idx = cur.indexOf(r.id);
         if(idx > -1) cur.splice(idx, 1); else cur.push(r.id);
@@ -1240,6 +1497,47 @@ function buildCell(dayKey, turno){
   return frag;
 }
 
+function buildTemplatePicker(weekIndex, originalBtn){
+  const box = document.createElement('div');
+  box.className = 'add-form template-picker';
+  if(state.templates.length === 0){
+    const empty = document.createElement('div');
+    empty.style.cssText = 'font-size:12px;color:var(--ink-faint);padding:4px 0;';
+    empty.textContent = 'Nenhum modelo salvo ainda.';
+    box.appendChild(empty);
+  } else {
+    state.templates.forEach(tpl => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.style.justifyContent = 'space-between';
+      row.style.alignItems = 'center';
+      const label = document.createElement('span');
+      label.style.cssText = 'font-size:12.5px; color:var(--ink); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+      label.textContent = tpl.name;
+      const applyBtn = document.createElement('button');
+      applyBtn.className = 'ok';
+      applyBtn.textContent = 'aplicar';
+      applyBtn.onclick = () => {
+        applyTemplateToWeek(weekIndex, tpl.id);
+        box.replaceWith(originalBtn);
+      };
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '×';
+      delBtn.onclick = () => deleteTemplate(tpl.id);
+      row.appendChild(label);
+      row.appendChild(applyBtn);
+      row.appendChild(delBtn);
+      box.appendChild(row);
+    });
+  }
+  const cancel = document.createElement('button');
+  cancel.textContent = 'fechar';
+  cancel.style.marginTop = '4px';
+  cancel.onclick = () => { box.replaceWith(originalBtn); };
+  box.appendChild(cancel);
+  return box;
+}
+
 function buildAddForm(dayKey, turno, originalBtn){
   const form = document.createElement('div');
   form.className = 'add-form';
@@ -1266,6 +1564,7 @@ function buildAddForm(dayKey, turno, originalBtn){
   ok.onclick = () => {
     const title = input.value.trim();
     if(!title) return;
+    pushUndoSnapshot();
     getAgendas(dayKey, turno).push({ id: uid(), title, residentIds: [], type: typeSelect.value || null });
     saveState(); renderAll();
   };
@@ -1342,19 +1641,117 @@ function renderReport(){
   }
 }
 
+function renderMonthlyReport(){
+  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const { counts, assigned, total } = countsForWeeks(weeks);
+  const folgaCounts = folgaCountsForWeeks(weeks);
+  const totalFolgas = Object.values(folgaCounts).reduce((a,b) => a+b, 0);
+  const statsEl = document.getElementById('monthly-report-stats');
+  const vals = Object.values(counts);
+  const max = vals.length ? Math.max(...vals, 1) : 1;
+  const min = vals.length ? Math.min(...vals) : 0;
+  const spread = max - min;
+
+  statsEl.innerHTML = `
+    <div class="stat"><div class="label">Mês</div><div class="val" style="font-size:15px">${formatMonthLabel(state.activeMonth)}</div></div>
+    <div class="stat"><div class="label">Total de agendas</div><div class="val">${total}</div></div>
+    <div class="stat"><div class="label">Atribuídas</div><div class="val">${assigned}</div></div>
+    <div class="stat"><div class="label">Livres</div><div class="val ${total-assigned>0?'amber':''}">${total - assigned}</div></div>
+    <div class="stat"><div class="label">Diferença máx.</div><div class="val ${spread>1?'amber':''}">${spread}</div></div>
+    <div class="stat"><div class="label">Folgas no mês</div><div class="val ${totalFolgas>0?'amber':''}">${totalFolgas}</div></div>
+  `;
+
+  function renderGroup(containerId, categoryKey){
+    const el = document.getElementById(containerId);
+    el.innerHTML = '';
+    const members = state.residents.filter(r => (r.category || null) === categoryKey);
+    if(members.length === 0){
+      el.innerHTML = '<div class="empty-note">Nenhum residente nesta categoria.</div>';
+      return;
+    }
+    const groupMax = Math.max(...members.map(r => counts[r.id] || 0), 1);
+    members.forEach(r => {
+      const c = counts[r.id] || 0;
+      const f = folgaCounts[r.id] || 0;
+      const pct = Math.round((c / groupMax) * 100);
+      const row = document.createElement('div');
+      row.className = 'bar-row';
+      row.innerHTML = `
+        <div class="bar-name">${r.name}</div>
+        <div class="bar-track"><div class="bar-fill${categoryKey ? ' ' + categoryKey : ''}" style="width:${pct}%"></div></div>
+        <div class="bar-val">${c}</div>
+        <div class="bar-folga">${f > 0 ? f + ' folga' + (f > 1 ? 's' : '') : ''}</div>
+      `;
+      el.appendChild(row);
+    });
+  }
+
+  renderGroup('monthly-report-r1', 'r1');
+  renderGroup('monthly-report-r2', 'r2');
+  renderGroup('monthly-report-r3', 'r3');
+
+  const hasUncategorized = state.residents.some(r => !r.category);
+  const semHead = document.getElementById('monthly-report-sem-head');
+  const semEl = document.getElementById('monthly-report-sem');
+  if(hasUncategorized){
+    semHead.style.display = '';
+    semEl.style.display = '';
+    renderGroup('monthly-report-sem', null);
+  } else {
+    semHead.style.display = 'none';
+    semEl.style.display = 'none';
+  }
+
+  const weeksEl = document.getElementById('monthly-report-weeks');
+  const hasUncategorized2 = hasUncategorized;
+  let tableHtml = `<table class="week-cat-table"><thead><tr>
+      <th>Semana</th><th>Agendas</th><th>R1</th><th>R2</th><th>R3</th>${hasUncategorized2 ? '<th>Sem cat.</th>' : ''}<th>Folgas</th>
+    </tr></thead><tbody>`;
+  weeks.forEach(w => {
+    const wk = countsForWeeks([w]);
+    const wkCat = { r1:0, r2:0, r3:0, sem:0 };
+    state.residents.forEach(r => {
+      const c = wk.counts[r.id] || 0;
+      if(r.category && wkCat[r.category] !== undefined) wkCat[r.category] += c; else wkCat.sem += c;
+    });
+    const wkFolgas = Object.values(folgaCountsForWeeks([w])).reduce((a,b) => a+b, 0);
+    tableHtml += `<tr>
+      <td class="wk-name">${w.label} (${w.range})</td>
+      <td>${wk.total}</td>
+      <td class="r1">${wkCat.r1}</td>
+      <td class="r2">${wkCat.r2}</td>
+      <td class="r3">${wkCat.r3}</td>
+      ${hasUncategorized2 ? `<td>${wkCat.sem}</td>` : ''}
+      <td>${wkFolgas}</td>
+    </tr>`;
+  });
+  tableHtml += '</tbody></table>';
+  weeksEl.innerHTML = tableHtml;
+}
+
 function renderAll(){
   renderRoster();
   renderMonthBar();
   renderTabs();
   renderWeeks();
   renderReport();
+  renderMonthlyReport();
 }
+
+document.getElementById('undo-btn').addEventListener('click', undoLastAction);
 
 document.getElementById('report-btn').addEventListener('click', () => {
   const rep = document.getElementById('report');
   const btn = document.getElementById('report-btn');
   const isActive = rep.classList.toggle('active');
   btn.textContent = isActive ? 'Ocultar relatório da semana ↑' : 'Ver relatório da semana ↓';
+});
+
+document.getElementById('monthly-report-btn').addEventListener('click', () => {
+  const rep = document.getElementById('monthly-report');
+  const btn = document.getElementById('monthly-report-btn');
+  const isActive = rep.classList.toggle('active');
+  btn.textContent = isActive ? 'Ocultar relatório mensal ↑' : 'Ver relatório mensal ↓';
 });
 
 initFirebase();
