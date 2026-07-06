@@ -149,6 +149,7 @@
   body.read-only .cat-select, body.read-only .month-add-btn, body.read-only .rename-input{
     opacity: 0.55;
   }
+  body.read-only .export-btn{ opacity: 1; }
   body.read-only .agenda{ cursor: default; }
 
   .roster{
@@ -326,6 +327,21 @@
   }
   .cell-head .d{ font-weight:600; color:var(--ink); font-size:13px;}
   .cell-head .r{ color: var(--ink-faint); font-size: 11px; }
+  .cell-head{ position: relative; }
+  .holiday-toggle{
+    display:block; margin-top: 5px; font-family: var(--font-mono); font-size: 9.5px;
+    color: var(--ink-faint); background: transparent; border: 1px dashed var(--line);
+    border-radius: 5px; padding: 2px 5px; cursor:pointer;
+  }
+  .holiday-toggle:hover{ color: var(--ink-dim); border-color: var(--ink-faint); }
+  .holiday-toggle.active{ color: var(--r3); background: var(--r3-bg); border-color: var(--r3-dim); }
+  .cell-head.is-holiday{ background: var(--r3-bg); }
+  .cell.is-holiday{ background: rgba(226,88,79,0.05); }
+  .holiday-note{
+    font-family: var(--font-mono); font-size: 11px; color: var(--r3);
+    border: 1px dashed var(--r3-dim); background: var(--r3-bg);
+    border-radius: 7px; padding: 8px; text-align:center;
+  }
   .turno-label{
     background: var(--panel-2);
     display:flex; align-items:center; justify-content:center;
@@ -759,6 +775,7 @@ function migrateState(raw){
     folgas,
     templates: old.templates || [],
     lockedWeeks: old.lockedWeeks || {},
+    holidays: old.holidays || {},
   };
 }
 
@@ -919,6 +936,26 @@ function getFolgas(dayKey, turno){
   const k = cellKey(dayKey, turno);
   if(!state.folgas[k]) state.folgas[k] = [];
   return state.folgas[k];
+}
+
+function isHoliday(dayKey){
+  return !!(state.holidays && state.holidays[dayKey]);
+}
+
+function toggleHoliday(dayKey, dayLabel){
+  if(!requireAuth()) return;
+  if(!state.holidays) state.holidays = {};
+  const active = !!state.holidays[dayKey];
+  if(active){
+    if(!confirm('Remover o feriado de ' + dayLabel + '? Voltará a ser possível adicionar agendas nesse dia.')) return;
+    pushUndoSnapshot();
+    delete state.holidays[dayKey];
+  } else {
+    if(!confirm('Marcar ' + dayLabel + ' como feriado? Não será possível adicionar novas agendas nesse dia.')) return;
+    pushUndoSnapshot();
+    state.holidays[dayKey] = true;
+  }
+  saveState(); renderAll();
 }
 
 function toggleFolga(dayKey, turno, residentId){
@@ -1086,8 +1123,9 @@ function buildCleanExportNode(weekIndex){
   corner.style.cssText = 'width:70px; padding:8px; border:1px solid #1d434c; background:#123039;';
   headRow.appendChild(corner);
   week.days.forEach(day => {
+    const holiday = isHoliday(day.key);
     const th = document.createElement('th');
-    th.style.cssText = 'padding:8px; border:1px solid #1d434c; background:#123039; font-family:"IBM Plex Mono",monospace; font-size:12.5px; text-align:left;';
+    th.style.cssText = 'padding:8px; border:1px solid #1d434c; background:' + (holiday ? '#2c1614' : '#123039') + '; font-family:"IBM Plex Mono",monospace; font-size:12.5px; text-align:left;';
     const strong = document.createElement('div');
     strong.style.cssText = 'font-weight:600;';
     strong.textContent = day.label;
@@ -1096,6 +1134,12 @@ function buildCleanExportNode(weekIndex){
     small.textContent = day.date;
     th.appendChild(strong);
     th.appendChild(small);
+    if(holiday){
+      const holidayTag = document.createElement('div');
+      holidayTag.style.cssText = 'color:#e2584f; font-size:10.5px; margin-top:3px;';
+      holidayTag.textContent = '🎌 Feriado';
+      th.appendChild(holidayTag);
+    }
     headRow.appendChild(th);
   });
   thead.appendChild(headRow);
@@ -1116,8 +1160,8 @@ function buildCleanExportNode(weekIndex){
       const list = getAgendas(day.key, turno.key);
       if(list.length === 0){
         const dash = document.createElement('div');
-        dash.style.cssText = 'color:#557a78; font-size:12px;';
-        dash.textContent = '—';
+        dash.style.cssText = 'color:' + (isHoliday(day.key) ? '#e2584f' : '#557a78') + '; font-size:12px;';
+        dash.textContent = isHoliday(day.key) ? 'Feriado' : '—';
         td.appendChild(dash);
       } else {
         list.forEach((ag, idx) => {
@@ -1493,12 +1537,12 @@ function renderWeeks(){
     };
 
     const exportImgBtn = document.createElement('button');
-    exportImgBtn.className = 'copy-btn';
+    exportImgBtn.className = 'copy-btn export-btn';
     exportImgBtn.textContent = '⬇ Imagem';
     exportImgBtn.onclick = () => exportWeekImage(wi);
 
     const exportPdfBtn = document.createElement('button');
-    exportPdfBtn.className = 'copy-btn';
+    exportPdfBtn.className = 'copy-btn export-btn';
     exportPdfBtn.textContent = '⬇ PDF';
     exportPdfBtn.onclick = () => exportWeekPDF(wi);
 
@@ -1524,14 +1568,22 @@ function renderWeeks(){
 
     grid.appendChild(makeDiv('cell-head', ''));
     week.days.forEach(day => {
-      grid.appendChild(makeDiv('cell-head', `<div class="d">${day.label}</div><div class="r">${day.date}</div>`));
+      const holiday = isHoliday(day.key);
+      const headCell = makeDiv('cell-head' + (holiday ? ' is-holiday' : ''), `<div class="d">${day.label}</div><div class="r">${day.date}</div>`);
+      const holidayBtn = document.createElement('button');
+      holidayBtn.className = 'holiday-toggle' + (holiday ? ' active' : '');
+      holidayBtn.textContent = holiday ? '🎌 Feriado' : '+ feriado';
+      holidayBtn.title = holiday ? 'Remover feriado' : 'Marcar este dia como feriado';
+      holidayBtn.onclick = () => toggleHoliday(day.key, day.label + ' (' + day.date + ')');
+      headCell.appendChild(holidayBtn);
+      grid.appendChild(headCell);
     });
 
     TURNOS.forEach(turno => {
       grid.appendChild(makeDiv('turno-label', turno.label));
       week.days.forEach(day => {
         const cell = document.createElement('div');
-        cell.className = 'cell';
+        cell.className = 'cell' + (isHoliday(day.key) ? ' is-holiday' : '');
         cell.appendChild(buildCell(day.key, turno.key));
         grid.appendChild(cell);
       });
@@ -1694,13 +1746,20 @@ function buildCell(dayKey, turno){
     frag.appendChild(box);
   });
 
-  const addBtn = document.createElement('button');
-  addBtn.className = 'add-btn';
-  addBtn.textContent = '+ agenda';
-  addBtn.onclick = () => {
-    addBtn.replaceWith(buildAddForm(dayKey, turno, addBtn));
-  };
-  frag.appendChild(addBtn);
+  if(isHoliday(dayKey)){
+    const holidayNote = document.createElement('div');
+    holidayNote.className = 'holiday-note';
+    holidayNote.textContent = '🎌 Feriado — sem novas agendas';
+    frag.appendChild(holidayNote);
+  } else {
+    const addBtn = document.createElement('button');
+    addBtn.className = 'add-btn';
+    addBtn.textContent = '+ agenda';
+    addBtn.onclick = () => {
+      addBtn.replaceWith(buildAddForm(dayKey, turno, addBtn));
+    };
+    frag.appendChild(addBtn);
+  }
 
   const folgaList = getFolgas(dayKey, turno);
   const folgaRow = document.createElement('div');
@@ -1792,6 +1851,7 @@ function buildAddForm(dayKey, turno, originalBtn){
     const title = input.value.trim();
     if(!title) return;
     if(!requireAuth()) return;
+    if(isHoliday(dayKey)){ alert('Este dia está marcado como feriado. Remova o feriado para adicionar agendas.'); return; }
     pushUndoSnapshot();
     getAgendas(dayKey, turno).push({ id: uid(), title, residentIds: [], type: typeSelect.value || null });
     saveState(); renderAll();
