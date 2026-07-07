@@ -822,18 +822,56 @@ function migrateState(raw){
   };
 }
 
-let state = migrateState(null);
+function emptyMonthData(){
+  return { agendas:{}, folgas:{}, holidays:{}, lockedWeeks:{} };
+}
+
+function defaultMeta(){
+  return {
+    residents: DEFAULT_RESIDENTS.map(r => ({ id:r.id, name:r.name, category:r.category||null })),
+    monthsCreated: [{ key:'2026-07', label:'Julho 2026' }],
+    templates: [],
+  };
+}
+
+function clone(x){ return JSON.parse(JSON.stringify(x)); }
+
+function partitionOldState(old){
+  const meta = {
+    residents: old.residents,
+    monthsCreated: old.monthsCreated,
+    templates: old.templates,
+  };
+  const monthsData = {};
+  function bucket(monthKey){
+    if(!monthsData[monthKey]) monthsData[monthKey] = emptyMonthData();
+    return monthsData[monthKey];
+  }
+  old.monthsCreated.forEach(m => bucket(m.key));
+  Object.keys(old.agendas || {}).forEach(k => { bucket(k.slice(0,7)).agendas[k] = old.agendas[k]; });
+  Object.keys(old.folgas || {}).forEach(k => { bucket(k.slice(0,7)).folgas[k] = old.folgas[k]; });
+  Object.keys(old.holidays || {}).forEach(k => { bucket(k.slice(0,7)).holidays[k] = old.holidays[k]; });
+  Object.keys(old.lockedWeeks || {}).forEach(k => { bucket(k.slice(0,7)).lockedWeeks[k] = old.lockedWeeks[k]; });
+  return { meta, monthsData };
+}
+
+let state = { residents:[], monthsCreated:[], templates:[], agendas:{}, folgas:{}, holidays:{}, lockedWeeks:{} };
+let activeMonth = localStorage.getItem('escalaUsg.activeMonth') || currentMonthKey();
 let activeWeekIndex = 0;
 let dragSource = null;
-let db, docRef;
+let db, metaRef, monthUnsub = null;
 let undoStack = [];
 const UNDO_LIMIT = 15;
 
-function pushUndoSnapshot(){
-  try{
-    undoStack.push(JSON.stringify(state));
-    if(undoStack.length > UNDO_LIMIT) undoStack.shift();
-  }catch(e){ console.error('Falha ao salvar snapshot de undo', e); }
+function monthDocRef(monthKey){ return db.collection('escala').doc(monthKey); }
+
+function persistActiveMonth(){
+  try{ localStorage.setItem('escalaUsg.activeMonth', activeMonth); }catch(e){}
+}
+
+function pushUndo(fn){
+  undoStack.push(fn);
+  if(undoStack.length > UNDO_LIMIT) undoStack.shift();
   updateUndoButton();
 }
 
@@ -841,9 +879,9 @@ function undoLastAction(){
   if(undoStack.length === 0) return;
   if(!requireAuth()) return;
   if(!confirm('Desfazer a última ação? Isso reverte para o estado anterior e pode sobrescrever mudanças feitas por outro residente nesse meio-tempo.')) return;
-  const prev = undoStack.pop();
-  state = JSON.parse(prev);
-  saveState(); renderAll();
+  const fn = undoStack.pop();
+  fn();
+  updateUndoButton();
 }
 
 function updateUndoButton(){
@@ -953,21 +991,14 @@ function initFirebase(){
   try{
     firebase.initializeApp(firebaseConfig);
     db = firebase.firestore();
-    docRef = db.collection('escala').doc('julho2026');
+    metaRef = db.collection('escala').doc('_meta');
 
-    docRef.onSnapshot((snap) => {
-      if(snap.exists){
-        state = migrateState(snap.data());
-      } else {
-        state = migrateState(null);
-        docRef.set(state);
-      }
-      if(activeWeekIndex === null) activeWeekIndex = 0;
-      setConn('ok', 'Sincronizado — dados compartilhados com o grupo');
-      renderAll();
-    }, (err) => {
+    ensureMetaAndMigrate().then(() => {
+      subscribeMeta();
+      switchActiveMonth(activeMonth);
+    }).catch((err) => {
       console.error(err);
-      setConn('err', 'Erro ao conectar ao Firebase — confira firebase-config.js');
+      setConn('err', 'Erro ao preparar dados — confira o console');
     });
   }catch(e){
     console.error(e);
@@ -975,9 +1006,75 @@ function initFirebase(){
   }
 }
 
-function saveState(){
-  if(!docRef) return;
-  docRef.set(state).catch((e) => {
+async function ensureMetaAndMigrate(){
+  const metaSnap = await metaRef.get();
+  if(metaSnap.exists) return;
+
+  const oldRef = db.collection('escala').doc('julho2026');
+  const oldSnap = await oldRef.get();
+
+  const batch = db.batch();
+  if(oldSnap.exists){
+    const old = migrateState(oldSnap.data());
+    const { meta, monthsData } = partitionOldState(old);
+    batch.set(metaRef, meta);
+    Object.keys(monthsData).forEach(monthKey => {
+      batch.set(monthDocRef(monthKey), monthsData[monthKey]);
+    });
+  } else {
+    const meta = defaultMeta();
+    batch.set(metaRef, meta);
+    meta.monthsCreated.forEach(m => batch.set(monthDocRef(m.key), emptyMonthData()));
+  }
+  await batch.commit();
+}
+
+function subscribeMeta(){
+  metaRef.onSnapshot((snap) => {
+    const data = snap.data() || defaultMeta();
+    state.residents = data.residents || [];
+    state.monthsCreated = data.monthsCreated || [];
+    state.templates = data.templates || [];
+    if(state.monthsCreated.length && !state.monthsCreated.some(m => m.key === activeMonth)){
+      switchActiveMonth(state.monthsCreated[state.monthsCreated.length - 1].key);
+      return;
+    }
+    renderAll();
+  }, (err) => {
+    console.error(err);
+    setConn('err', 'Erro ao conectar ao Firebase — confira firebase-config.js');
+  });
+}
+
+function switchActiveMonth(monthKey){
+  activeMonth = monthKey;
+  activeWeekIndex = 0;
+  persistActiveMonth();
+  if(monthUnsub) monthUnsub();
+  state.agendas = {}; state.folgas = {}; state.holidays = {}; state.lockedWeeks = {};
+  monthUnsub = monthDocRef(monthKey).onSnapshot((snap) => {
+    const data = snap.data() || emptyMonthData();
+    state.agendas = data.agendas || {};
+    state.folgas = data.folgas || {};
+    state.holidays = data.holidays || {};
+    state.lockedWeeks = data.lockedWeeks || {};
+    setConn('ok', 'Sincronizado — dados compartilhados com o grupo');
+    renderAll();
+  }, (err) => {
+    console.error(err);
+    setConn('err', 'Erro ao conectar ao Firebase — confira firebase-config.js');
+  });
+}
+
+function saveMetaField(field){
+  metaRef.update({ [field]: state[field] }).catch((e) => {
+    console.error('Falha ao salvar', e);
+    setConn('err', 'Falha ao salvar — verifique sua conexão');
+  });
+}
+
+function saveMonthField(monthKey, updates){
+  monthDocRef(monthKey).update(updates).catch((e) => {
     console.error('Falha ao salvar', e);
     setConn('err', 'Falha ao salvar — verifique sua conexão');
   });
@@ -1004,29 +1101,61 @@ function isHoliday(dayKey){
 
 function toggleHoliday(dayKey, dayLabel){
   if(!requireAuth()) return;
-  if(!state.holidays) state.holidays = {};
-  const active = !!state.holidays[dayKey];
+  const month = activeMonth;
+  const active = isHoliday(dayKey);
+  const manhaKey = cellKey(dayKey, 'manha'), tardeKey = cellKey(dayKey, 'tarde');
   if(active){
     if(!confirm('Remover o feriado de ' + dayLabel + '? Voltará a ser possível adicionar agendas e folgas nesse dia.')) return;
-    pushUndoSnapshot();
+    pushUndo(() => {
+      state.holidays[dayKey] = true;
+      saveMonthField(month, { ['holidays.'+dayKey]: true });
+      renderAll();
+    });
     delete state.holidays[dayKey];
+    saveMonthField(month, { ['holidays.'+dayKey]: firebase.firestore.FieldValue.delete() });
   } else {
     if(!confirm('Marcar ' + dayLabel + ' como feriado? Não será possível adicionar agendas nem folgas nesse dia, e as folgas já marcadas nesse dia serão removidas.')) return;
-    pushUndoSnapshot();
+    const beforeManha = getFolgas(dayKey, 'manha').slice();
+    const beforeTarde = getFolgas(dayKey, 'tarde').slice();
+    pushUndo(() => {
+      delete state.holidays[dayKey];
+      state.folgas[manhaKey] = beforeManha;
+      state.folgas[tardeKey] = beforeTarde;
+      saveMonthField(month, {
+        ['holidays.'+dayKey]: firebase.firestore.FieldValue.delete(),
+        ['folgas.'+manhaKey]: beforeManha,
+        ['folgas.'+tardeKey]: beforeTarde,
+      });
+      renderAll();
+    });
     state.holidays[dayKey] = true;
-    TURNOS.forEach(t => { state.folgas[cellKey(dayKey, t.key)] = []; });
+    state.folgas[manhaKey] = [];
+    state.folgas[tardeKey] = [];
+    saveMonthField(month, {
+      ['holidays.'+dayKey]: true,
+      ['folgas.'+manhaKey]: [],
+      ['folgas.'+tardeKey]: [],
+    });
   }
-  saveState(); renderAll();
+  renderAll();
 }
 
 function toggleFolga(dayKey, turno, residentId){
   if(!requireAuth()) return;
   if(isHoliday(dayKey)) return;
-  pushUndoSnapshot();
+  const cell = cellKey(dayKey, turno);
+  const month = activeMonth;
   const list = getFolgas(dayKey, turno);
+  const before = list.slice();
+  pushUndo(() => {
+    state.folgas[cell] = before;
+    saveMonthField(month, { ['folgas.'+cell]: before });
+    renderAll();
+  });
   const idx = list.indexOf(residentId);
   if(idx > -1) list.splice(idx, 1); else list.push(residentId);
-  saveState(); renderAll();
+  saveMonthField(month, { ['folgas.'+cell]: list });
+  renderAll();
 }
 
 function folgaCountsForWeeks(weeks){
@@ -1079,27 +1208,52 @@ function addResident(name, category){
   const trimmed = name.trim();
   if(!trimmed) return;
   if(!requireAuth()) return;
-  pushUndoSnapshot();
+  const before = clone(state.residents);
+  pushUndo(() => {
+    state.residents = before;
+    saveMetaField('residents');
+    renderAll();
+  });
   const id = slugify(trimmed) + '-' + Math.random().toString(36).slice(2,5);
   state.residents.push({ id, name: trimmed, category: category || null });
-  saveState(); renderAll();
+  saveMetaField('residents');
+  renderAll();
 }
 
 function setResidentCategory(id, category){
   const r = getResident(id);
   if(!r) return;
   if(!requireAuth()){ renderAll(); return; }
-  pushUndoSnapshot();
+  const before = clone(state.residents);
+  pushUndo(() => {
+    state.residents = before;
+    saveMetaField('residents');
+    renderAll();
+  });
   r.category = category || null;
-  saveState(); renderAll();
+  saveMetaField('residents');
+  renderAll();
 }
 
 function removeResident(id){
   const r = state.residents.find(x => x.id === id);
   if(!r) return;
   if(!requireAuth()) return;
-  if(!confirm('Remover ' + r.name + '? Os turnos já atribuídos a essa pessoa ficarão livres.')) return;
-  pushUndoSnapshot();
+  if(!confirm('Remover ' + r.name + '? Os turnos já atribuídos a essa pessoa neste mês ficarão livres.')) return;
+
+  const month = activeMonth;
+  const beforeResidents = clone(state.residents);
+  const beforeAgendas = clone(state.agendas);
+  const beforeFolgas = clone(state.folgas);
+  pushUndo(() => {
+    state.residents = beforeResidents;
+    state.agendas = beforeAgendas;
+    state.folgas = beforeFolgas;
+    saveMetaField('residents');
+    saveMonthField(month, { agendas: beforeAgendas, folgas: beforeFolgas });
+    renderAll();
+  });
+
   Object.values(state.agendas).forEach(list => {
     list.forEach(ag => {
       if(ag.residentIds){
@@ -1113,20 +1267,30 @@ function removeResident(id){
     if(idx > -1) state.folgas[k].splice(idx, 1);
   });
   state.residents = state.residents.filter(x => x.id !== id);
-  saveState(); renderAll();
+
+  saveMetaField('residents');
+  saveMonthField(month, { agendas: state.agendas, folgas: state.folgas });
+  renderAll();
 }
 
 function createMonth(monthKey){
   if(!monthKey) return;
   if(!requireAuth()) return;
-  pushUndoSnapshot();
-  if(!state.monthsCreated.some(m => m.key === monthKey)){
+  const isNew = !state.monthsCreated.some(m => m.key === monthKey);
+  if(isNew){
+    const before = clone(state.monthsCreated);
+    pushUndo(() => {
+      state.monthsCreated = before;
+      saveMetaField('monthsCreated');
+      renderAll();
+    });
     state.monthsCreated.push({ key: monthKey, label: formatMonthLabel(monthKey) });
     state.monthsCreated.sort((a,b) => a.key.localeCompare(b.key));
+    saveMetaField('monthsCreated');
+    monthDocRef(monthKey).set(emptyMonthData()).catch((e) => console.error('Falha ao criar mês', e));
   }
-  state.activeMonth = monthKey;
-  activeWeekIndex = 0;
-  saveState(); renderAll();
+  switchActiveMonth(monthKey);
+  renderAll();
 }
 
 function weekLockKey(week){ return week.days[0].key; }
@@ -1137,21 +1301,31 @@ function isWeekLocked(week){
 
 function toggleWeekLock(weekIndex){
   if(!requireAuth()) return;
-  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const weeks = getWeeksForMonthKey(activeMonth);
   const week = weeks[weekIndex];
   const key = weekLockKey(week);
-  if(!state.lockedWeeks) state.lockedWeeks = {};
-  const locked = !!state.lockedWeeks[key];
+  const month = activeMonth;
+  const locked = isWeekLocked(week);
   if(locked){
     if(!confirm('Desbloquear a semana de ' + week.range + ' para edição?')) return;
-    pushUndoSnapshot();
+    pushUndo(() => {
+      state.lockedWeeks[key] = true;
+      saveMonthField(month, { ['lockedWeeks.'+key]: true });
+      renderAll();
+    });
     delete state.lockedWeeks[key];
+    saveMonthField(month, { ['lockedWeeks.'+key]: firebase.firestore.FieldValue.delete() });
   } else {
     if(!confirm('Finalizar a semana de ' + week.range + '? Ela ficará travada para edição até ser desbloqueada.')) return;
-    pushUndoSnapshot();
+    pushUndo(() => {
+      delete state.lockedWeeks[key];
+      saveMonthField(month, { ['lockedWeeks.'+key]: firebase.firestore.FieldValue.delete() });
+      renderAll();
+    });
     state.lockedWeeks[key] = true;
+    saveMonthField(month, { ['lockedWeeks.'+key]: true });
   }
-  saveState(); renderAll();
+  renderAll();
 }
 
 function buildExportRow(label, value, color){
@@ -1165,7 +1339,7 @@ function buildExportRow(label, value, color){
 }
 
 function buildCleanExportNode(weekIndex){
-  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const weeks = getWeeksForMonthKey(activeMonth);
   const week = weeks[weekIndex];
 
   const wrapper = document.createElement('div');
@@ -1173,7 +1347,7 @@ function buildCleanExportNode(weekIndex){
 
   const title = document.createElement('div');
   title.style.cssText = 'font-family:"IBM Plex Mono",monospace; font-size:17px; margin-bottom:16px;';
-  title.textContent = 'Escala USG — ' + formatMonthLabel(state.activeMonth) + ' · ' + week.label + ' (' + week.range + ')';
+  title.textContent = 'Escala USG — ' + formatMonthLabel(activeMonth) + ' · ' + week.label + ' (' + week.range + ')';
   wrapper.appendChild(title);
 
   const table = document.createElement('table');
@@ -1269,7 +1443,7 @@ function buildCleanExportNode(weekIndex){
 }
 
 async function captureWeekCanvas(weekIndex){
-  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const weeks = getWeeksForMonthKey(activeMonth);
   const week = weeks[weekIndex];
   const wrapper = buildCleanExportNode(weekIndex);
 
@@ -1305,7 +1479,7 @@ function exportWeekPDF(weekIndex){
 
 function saveWeekAsTemplate(weekIndex){
   if(!requireAuth()) return;
-  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const weeks = getWeeksForMonthKey(activeMonth);
   const week = weeks[weekIndex];
   const name = prompt('Nome do modelo (ex.: "Semana padrão"):', '');
   if(!name || !name.trim()) return;
@@ -1317,11 +1491,17 @@ function saveWeekAsTemplate(weekIndex){
       cells['d' + di + '_' + t.key] = list.map(ag => ({ title: ag.title, type: ag.type || null }));
     });
   });
-  pushUndoSnapshot();
+  const before = clone(state.templates);
+  pushUndo(() => {
+    state.templates = before;
+    saveMetaField('templates');
+    renderAll();
+  });
   const existingIdx = state.templates.findIndex(tp => tp.name === trimmedName);
   const tpl = { id: existingIdx > -1 ? state.templates[existingIdx].id : uid(), name: trimmedName, cells };
   if(existingIdx > -1) state.templates[existingIdx] = tpl; else state.templates.push(tpl);
-  saveState(); renderAll();
+  saveMetaField('templates');
+  renderAll();
   alert('Modelo "' + tpl.name + '" salvo.');
 }
 
@@ -1329,23 +1509,49 @@ function applyTemplateToWeek(weekIndex, templateId){
   const tpl = state.templates.find(t => t.id === templateId);
   if(!tpl) return;
   if(!requireAuth()) return;
-  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const weeks = getWeeksForMonthKey(activeMonth);
   const week = weeks[weekIndex];
   if(isWeekLocked(week)){
     alert('Esta semana está finalizada. Desbloqueie-a antes de colar um modelo.');
     return;
   }
   if(!confirm('Aplicar o modelo "' + tpl.name + '" nesta semana? Isso substitui toda a semana atual (agendas e folgas). Os residentes entram livres.')) return;
-  pushUndoSnapshot();
+
+  const month = activeMonth;
+  const beforeState = {};
+  week.days.forEach((day) => {
+    TURNOS.forEach(t => {
+      const ck = cellKey(day.key, t.key);
+      beforeState[ck] = { agendas: clone(getAgendas(day.key, t.key)), folgas: clone(getFolgas(day.key, t.key)) };
+    });
+  });
+  pushUndo(() => {
+    const updates = {};
+    Object.keys(beforeState).forEach(ck => {
+      state.agendas[ck] = beforeState[ck].agendas;
+      state.folgas[ck] = beforeState[ck].folgas;
+      updates['agendas.'+ck] = beforeState[ck].agendas;
+      updates['folgas.'+ck] = beforeState[ck].folgas;
+    });
+    saveMonthField(month, updates);
+    renderAll();
+  });
+
+  const updates = {};
   week.days.forEach((day, di) => {
     TURNOS.forEach(t => {
       const key = 'd' + di + '_' + t.key;
       const items = tpl.cells[key] || [];
-      state.agendas[cellKey(day.key, t.key)] = items.map(it => ({ id: uid(), title: it.title, type: it.type || null, residentIds: [] }));
-      state.folgas[cellKey(day.key, t.key)] = [];
+      const ck = cellKey(day.key, t.key);
+      const newAgendas = items.map(it => ({ id: uid(), title: it.title, type: it.type || null, residentIds: [] }));
+      state.agendas[ck] = newAgendas;
+      state.folgas[ck] = [];
+      updates['agendas.'+ck] = newAgendas;
+      updates['folgas.'+ck] = [];
     });
   });
-  saveState(); renderAll();
+  saveMonthField(month, updates);
+  renderAll();
 }
 
 function deleteTemplate(id){
@@ -1353,36 +1559,46 @@ function deleteTemplate(id){
   if(!tpl) return;
   if(!requireAuth()) return;
   if(!confirm('Excluir o modelo "' + tpl.name + '"?')) return;
-  pushUndoSnapshot();
+  const before = clone(state.templates);
+  pushUndo(() => {
+    state.templates = before;
+    saveMetaField('templates');
+    renderAll();
+  });
   state.templates = state.templates.filter(t => t.id !== id);
-  saveState(); renderAll();
+  saveMetaField('templates');
+  renderAll();
 }
 
-function copyWeek(weekIndex, direction){
+async function copyWeek(weekIndex, direction){
   if(!requireAuth()) return;
-  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const weeks = getWeeksForMonthKey(activeMonth);
   const source = weeks[weekIndex];
   let target;
+  let targetMonthKey = activeMonth;
+  let crossMonth = false;
 
   if(direction === 1){
     if(weekIndex + 1 < weeks.length){
       target = weeks[weekIndex + 1];
     } else {
       const sorted = state.monthsCreated.slice().sort((a,b) => a.key.localeCompare(b.key));
-      const idx = sorted.findIndex(m => m.key === state.activeMonth);
+      const idx = sorted.findIndex(m => m.key === activeMonth);
       const nextMonth = sorted[idx + 1];
       if(!nextMonth){
         alert('Esta é a última semana do mês. Crie o próximo mês antes de copiar.');
         return;
       }
       target = getWeeksForMonthKey(nextMonth.key)[0];
+      targetMonthKey = nextMonth.key;
+      crossMonth = true;
     }
   } else {
     if(weekIndex - 1 >= 0){
       target = weeks[weekIndex - 1];
     } else {
       const sorted = state.monthsCreated.slice().sort((a,b) => a.key.localeCompare(b.key));
-      const idx = sorted.findIndex(m => m.key === state.activeMonth);
+      const idx = sorted.findIndex(m => m.key === activeMonth);
       const prevMonth = sorted[idx - 1];
       if(!prevMonth){
         alert('Esta é a primeira semana do mês. Crie o mês anterior antes de copiar.');
@@ -1390,32 +1606,70 @@ function copyWeek(weekIndex, direction){
       }
       const prevWeeks = getWeeksForMonthKey(prevMonth.key);
       target = prevWeeks[prevWeeks.length - 1];
+      targetMonthKey = prevMonth.key;
+      crossMonth = true;
     }
   }
 
-  if(isWeekLocked(target)){
+  let targetLockedWeeks = state.lockedWeeks;
+  let targetExistingAgendas = state.agendas;
+  let targetExistingFolgas = state.folgas;
+  if(crossMonth){
+    const snap = await monthDocRef(targetMonthKey).get();
+    const data = snap.data() || emptyMonthData();
+    targetLockedWeeks = data.lockedWeeks || {};
+    targetExistingAgendas = data.agendas || {};
+    targetExistingFolgas = data.folgas || {};
+  }
+
+  if(targetLockedWeeks[weekLockKey(target)]){
     alert('A semana de ' + target.range + ' está finalizada. Desbloqueie-a antes de sobrescrever.');
     return;
   }
 
   if(!confirm('Substituir toda a semana de ' + target.range + ' pelas agendas desta semana? As agendas que já existem nessa semana de destino serão apagadas. Os residentes atribuídos não são copiados — os turnos entram livres.')) return;
 
-  pushUndoSnapshot();
+  const updates = {};
+  const beforeForUndo = {};
   source.days.forEach((day, i) => {
     const targetDay = target.days[i];
     TURNOS.forEach(t => {
       const srcList = getAgendas(day.key, t.key);
       const newList = srcList.map(ag => ({ id: uid(), title: ag.title, residentIds: [], type: ag.type || null }));
-      state.agendas[cellKey(targetDay.key, t.key)] = newList;
-      state.folgas[cellKey(targetDay.key, t.key)] = [];
+      const ck = cellKey(targetDay.key, t.key);
+      updates['agendas.'+ck] = newList;
+      updates['folgas.'+ck] = [];
+      beforeForUndo[ck] = {
+        agendas: clone(targetExistingAgendas[ck] || []),
+        folgas: clone(targetExistingFolgas[ck] || []),
+      };
+      if(!crossMonth){
+        state.agendas[ck] = newList;
+        state.folgas[ck] = [];
+      }
     });
   });
-  saveState(); renderAll();
 
+  pushUndo(() => {
+    const undoUpdates = {};
+    Object.keys(beforeForUndo).forEach(ck => {
+      undoUpdates['agendas.'+ck] = beforeForUndo[ck].agendas;
+      undoUpdates['folgas.'+ck] = beforeForUndo[ck].folgas;
+      if(!crossMonth){
+        state.agendas[ck] = beforeForUndo[ck].agendas;
+        state.folgas[ck] = beforeForUndo[ck].folgas;
+      }
+    });
+    saveMonthField(targetMonthKey, undoUpdates);
+    renderAll();
+  });
+
+  saveMonthField(targetMonthKey, updates);
+  renderAll();
 }
 
 function renderRoster(){
-  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const weeks = getWeeksForMonthKey(activeMonth);
   const { counts } = countsForWeeks(weeks);
   const vals = Object.values(counts);
   const min = vals.length ? Math.min(...vals) : 0;
@@ -1424,7 +1678,7 @@ function renderRoster(){
 
   const label = document.createElement('div');
   label.className = 'roster-label';
-  label.innerHTML = `<span>Turnos cobertos em ${formatMonthLabel(state.activeMonth).toLowerCase()}</span>
+  label.innerHTML = `<span>Turnos cobertos em ${formatMonthLabel(activeMonth).toLowerCase()}</span>
     <span class="legend">
       <span><span class="sq" style="background:var(--r1)"></span>R1</span>
       <span><span class="sq" style="background:var(--r2)"></span>R2</span>
@@ -1503,9 +1757,9 @@ function renderMonthBar(){
   el.innerHTML = '';
   state.monthsCreated.forEach(m => {
     const btn = document.createElement('button');
-    btn.className = 'month-pill' + (m.key === state.activeMonth ? ' active' : '');
+    btn.className = 'month-pill' + (m.key === activeMonth ? ' active' : '');
     btn.textContent = m.label;
-    btn.onclick = () => { state.activeMonth = m.key; activeWeekIndex = 0; saveState(); renderAll(); };
+    btn.onclick = () => { switchActiveMonth(m.key); renderAll(); };
     el.appendChild(btn);
   });
   const addBtn = document.createElement('button');
@@ -1534,7 +1788,7 @@ function buildMonthAddForm(originalBtn){
 }
 
 function renderTabs(){
-  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const weeks = getWeeksForMonthKey(activeMonth);
   if(activeWeekIndex >= weeks.length) activeWeekIndex = 0;
   const el = document.getElementById('tabs');
   el.innerHTML = '';
@@ -1556,7 +1810,7 @@ function typeOptionsHtml(selectedType){
 }
 
 function renderWeeks(){
-  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const weeks = getWeeksForMonthKey(activeMonth);
   const el = document.getElementById('weeks');
   el.innerHTML = '';
   weeks.forEach((week, wi) => {
@@ -1704,10 +1958,18 @@ function buildCell(dayKey, turno){
       const fromIdx = arr.findIndex(a => a.id === dragSource.id);
       const toIdx = arr.findIndex(a => a.id === ag.id);
       if(fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
-      pushUndoSnapshot();
+      const ck = cellKey(dayKey, turno);
+      const month = activeMonth;
+      const before = clone(arr);
+      pushUndo(() => {
+        state.agendas[ck] = before;
+        saveMonthField(month, { ['agendas.'+ck]: before });
+        renderAll();
+      });
       const [moved] = arr.splice(fromIdx, 1);
       arr.splice(toIdx, 0, moved);
-      saveState(); renderAll();
+      saveMonthField(month, { ['agendas.'+ck]: arr });
+      renderAll();
     });
 
     const titleRow = document.createElement('div');
@@ -1741,14 +2003,23 @@ function buildCell(dayKey, turno){
       const commit = () => {
         const v = input.value.trim();
         if(v && v !== ag.title){
-          pushUndoSnapshot();
+          const ck = cellKey(dayKey, turno);
+          const month = activeMonth;
+          const arr = getAgendas(dayKey, turno);
+          const before = clone(arr);
+          pushUndo(() => {
+            state.agendas[ck] = before;
+            saveMonthField(month, { ['agendas.'+ck]: before });
+            renderAll();
+          });
           ag.title = v;
+          saveMonthField(month, { ['agendas.'+ck]: arr });
         }
-        saveState(); renderAll();
+        renderAll();
       };
       input.addEventListener('keydown', (e) => {
         if(e.key === 'Enter') commit();
-        if(e.key === 'Escape'){ saveState(); renderAll(); }
+        if(e.key === 'Escape'){ renderAll(); }
       });
       input.addEventListener('blur', commit);
     };
@@ -1761,11 +2032,18 @@ function buildCell(dayKey, turno){
       if(!requireAuth()) return;
       const arr = getAgendas(dayKey, turno);
       const idx = arr.findIndex(a => a.id === ag.id);
-      if(idx > -1){
-        pushUndoSnapshot();
-        arr.splice(idx, 1);
-      }
-      saveState(); renderAll();
+      if(idx === -1) return;
+      const ck = cellKey(dayKey, turno);
+      const month = activeMonth;
+      const before = clone(arr);
+      pushUndo(() => {
+        state.agendas[ck] = before;
+        saveMonthField(month, { ['agendas.'+ck]: before });
+        renderAll();
+      });
+      arr.splice(idx, 1);
+      saveMonthField(month, { ['agendas.'+ck]: arr });
+      renderAll();
     };
 
     actions.appendChild(editBtn);
@@ -1778,9 +2056,18 @@ function buildCell(dayKey, turno){
     typeSelect.innerHTML = typeOptionsHtml(ag.type);
     typeSelect.onchange = (e) => {
       if(!requireAuth()){ renderAll(); return; }
-      pushUndoSnapshot();
+      const ck = cellKey(dayKey, turno);
+      const month = activeMonth;
+      const arr = getAgendas(dayKey, turno);
+      const before = clone(arr);
+      pushUndo(() => {
+        state.agendas[ck] = before;
+        saveMonthField(month, { ['agendas.'+ck]: before });
+        renderAll();
+      });
       ag.type = e.target.value || null;
-      saveState(); renderAll();
+      saveMonthField(month, { ['agendas.'+ck]: arr });
+      renderAll();
     };
     box.appendChild(typeSelect);
 
@@ -1802,9 +2089,18 @@ function buildCell(dayKey, turno){
           const ok = await confirmR3Assignment();
           if(!ok) return;
         }
-        pushUndoSnapshot();
+        const arr = getAgendas(dayKey, turno);
+        const ck = cellKey(dayKey, turno);
+        const month = activeMonth;
+        const before = clone(arr);
+        pushUndo(() => {
+          state.agendas[ck] = before;
+          saveMonthField(month, { ['agendas.'+ck]: before });
+          renderAll();
+        });
         if(idx > -1) cur.splice(idx, 1); else cur.push(r.id);
-        saveState(); renderAll();
+        saveMonthField(month, { ['agendas.'+ck]: arr });
+        renderAll();
       };
       chips.appendChild(chip);
     });
@@ -1919,9 +2215,18 @@ function buildAddForm(dayKey, turno, originalBtn){
     if(!title) return;
     if(!requireAuth()) return;
     if(isHoliday(dayKey)){ alert('Este dia está marcado como feriado. Remova o feriado para adicionar agendas.'); return; }
-    pushUndoSnapshot();
-    getAgendas(dayKey, turno).push({ id: uid(), title, residentIds: [], type: typeSelect.value || null });
-    saveState(); renderAll();
+    const ck = cellKey(dayKey, turno);
+    const month = activeMonth;
+    const arr = getAgendas(dayKey, turno);
+    const before = clone(arr);
+    pushUndo(() => {
+      state.agendas[ck] = before;
+      saveMonthField(month, { ['agendas.'+ck]: before });
+      renderAll();
+    });
+    arr.push({ id: uid(), title, residentIds: [], type: typeSelect.value || null });
+    saveMonthField(month, { ['agendas.'+ck]: arr });
+    renderAll();
   };
   row.appendChild(cancel);
   row.appendChild(ok);
@@ -1934,7 +2239,7 @@ function buildAddForm(dayKey, turno, originalBtn){
 }
 
 function renderReport(){
-  const allWeeks = getWeeksForMonthKey(state.activeMonth);
+  const allWeeks = getWeeksForMonthKey(activeMonth);
   const week = allWeeks[activeWeekIndex] || allWeeks[0];
   const { counts, assigned, total } = countsForWeeks([week]);
   const folgaCounts = folgaCountsForWeeks([week]);
@@ -2003,7 +2308,7 @@ function renderReport(){
 }
 
 function renderMonthlyReport(){
-  const weeks = getWeeksForMonthKey(state.activeMonth);
+  const weeks = getWeeksForMonthKey(activeMonth);
   const { counts, assigned, total } = countsForWeeks(weeks);
   const folgaCounts = folgaCountsForWeeks(weeks);
   const totalFolgas = Object.values(folgaCounts).reduce((a,b) => a+b, 0);
@@ -2014,7 +2319,7 @@ function renderMonthlyReport(){
   const spread = max - min;
 
   statsEl.innerHTML = `
-    <div class="stat"><div class="label">Mês</div><div class="val" style="font-size:15px">${formatMonthLabel(state.activeMonth)}</div></div>
+    <div class="stat"><div class="label">Mês</div><div class="val" style="font-size:15px">${formatMonthLabel(activeMonth)}</div></div>
     <div class="stat"><div class="label">Total de agendas</div><div class="val">${total}</div></div>
     <div class="stat"><div class="label">Atribuídas</div><div class="val">${assigned}</div></div>
     <div class="stat"><div class="label">Livres</div><div class="val ${total-assigned>0?'amber':''}">${total - assigned}</div></div>
